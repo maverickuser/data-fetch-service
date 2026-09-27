@@ -1,0 +1,11 @@
+# Documentation map
+
+- [Fetch LLD](specs/data-puller-service-lld.md): authoritative service design.
+- [Processor OpenAPI JSON](specs/data-processing-service-openapi.json) and [YAML](specs/data-processing-service-openapi.yaml): authoritative admission contract, API 1.0.0.
+- [Implementation plan](plans/data-fetch-service-implementation-plan.md) and [status](plans/implementation-status.md): sequence and evidence.
+- [Implementation context](plans/data-fetch-service-implementation-context-spec.md): supplied and pending inputs.
+- [Go standards](engineering/go-standards.md) and [review policy](engineering/pr-review.md): engineering gates.
+- [Original fetch specification](specs/data-puller-service-spec.md): historical; LLD supersedes conflicts.
+- [Processor LLD](specs/structured-file-processing-lld.md) and [processor specification](specs/structured-file-processing-spec.md): external references. Processor LLD is preserved unchanged at user request; authoritative admission details are in OpenAPI.
+
+The shared-network stack owns VPC resources; application stacks consume outputs. Network ownership prose predating that decision does not authorize duplicate Terraform ownership. Exact processor listener outputs belong to its application stack, not the network stack.

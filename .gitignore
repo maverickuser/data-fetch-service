@@ -1,0 +1,5 @@
+.reports/
+.DS_Store
+*.tfstate*
+.terraform/
+__pycache__/
