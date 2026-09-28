@@ -15,7 +15,7 @@ type ResolvedJob struct {
 	ID             string `json:"id"`
 	URL            string `json:"url"`
 	SourceFilename string `json:"source_filename"`
-	Filename       string `json:"filename"`
+	Filename       string `json:"filename,omitempty"` // Empty until acquisition selects a response header or job-ID fallback.
 	MemberPath     string `json:"member_path,omitempty"`
 	Format         string `json:"format"`
 }
@@ -138,6 +138,10 @@ func resolveJob(job Job, inputs map[string]string, date time.Time) (ResolvedJob,
 		}
 	}
 	u.RawQuery = query.Encode()
+	sourceFilename := path.Base(u.Path)
+	if !safeFilename(sourceFilename, job.Response.Format) {
+		sourceFilename = ""
+	}
 	format, name, member := job.Response.Format, job.Response.FilenameTemplate, ""
 	if x := job.Response.Extraction; x != nil {
 		format, name = x.Format, x.FilenameTemplate
@@ -148,18 +152,24 @@ func resolveJob(job Job, inputs map[string]string, date time.Time) (ResolvedJob,
 		if !safeMember(member) {
 			return ResolvedJob{}, fmt.Errorf("unsafe ZIP member")
 		}
+		if name == "" {
+			name = path.Base(member)
+		}
+	}
+	if name == "" {
+		name = sourceFilename
 	}
 	name, err = RenderTemplate(name, values, date)
 	if err != nil {
 		return ResolvedJob{}, err
 	}
-	if !safeFilename(name, format) {
+	if name != "" && !safeFilename(name, format) {
 		return ResolvedJob{}, fmt.Errorf("unsafe output filename")
 	}
 	if strings.HasSuffix(strings.ToLower(u.Path), ".zip") && job.Response.Format != "zip" {
 		return ResolvedJob{}, fmt.Errorf("ZIP URL requires extraction")
 	}
-	return ResolvedJob{ID: job.ID, URL: u.String(), SourceFilename: path.Base(u.Path), Filename: name, MemberPath: member, Format: format}, nil
+	return ResolvedJob{ID: job.ID, URL: u.String(), SourceFilename: sourceFilename, Filename: name, MemberPath: member, Format: format}, nil
 }
 
 // safeMember rejects traversal, absolute paths and platform-specific separators.
@@ -169,5 +179,5 @@ func safeMember(value string) bool {
 
 // safeFilename requires a single safe filename with the declared content extension.
 func safeFilename(value, format string) bool {
-	return safeMember(value) && !strings.Contains(value, "/") && path.Ext(value) == "."+format
+	return safeMember(value) && !strings.Contains(value, "/") && strings.EqualFold(path.Ext(value), "."+format)
 }

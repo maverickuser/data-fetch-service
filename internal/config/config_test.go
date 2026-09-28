@@ -62,7 +62,7 @@ func TestInvalidConfiguration(t *testing.T) {
 		"URL":               func(c *Config) { c.Events[0].Jobs[0].Request.URLTemplate = "https://%zz" },
 		"relative URL":      func(c *Config) { c.Events[0].Jobs[0].Request.URLTemplate = "/relative" },
 		"format":            func(c *Config) { c.Events[0].Jobs[0].Response.Format = "xml" },
-		"filename":          func(c *Config) { c.Events[0].Jobs[0].Response.Extraction.FilenameTemplate = "" },
+		"filename":          func(c *Config) { c.Events[1].Jobs[0].Response.FilenameTemplate = "" },
 		"member":            func(c *Config) { c.Events[0].Jobs[0].Response.Extraction.MemberPath = "" },
 		"extraction":        func(c *Config) { c.Events[0].Jobs[0].Response.Format = "json" },
 		"member format":     func(c *Config) { c.Events[0].Jobs[0].Response.Extraction.Format = "xml" },

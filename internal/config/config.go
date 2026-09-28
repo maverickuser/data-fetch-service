@@ -256,8 +256,8 @@ func (c Config) Validate() error {
 			if job.Response.Format != "json" && job.Response.Format != "zip" && job.Response.Format != "csv" {
 				return fmt.Errorf("job %s/%s has unsupported response format", event.ID, job.ID)
 			}
-			if job.Response.FilenameTemplate == "" && (job.Response.Extraction == nil || job.Response.Extraction.FilenameTemplate == "") {
-				return fmt.Errorf("job %s/%s requires filename template", event.ID, job.ID)
+			if _, isin := event.Inputs["isin_code"]; isin && job.Response.Format == "json" && !strings.Contains(job.Response.FilenameTemplate, "{isin_code}") {
+				return fmt.Errorf("job %s/%s requires ISIN filename template", event.ID, job.ID)
 			}
 			if job.Response.Format == "zip" && (job.Response.Extraction == nil || job.Response.Extraction.MemberPath == "") {
 				return fmt.Errorf("job %s/%s ZIP requires extraction member_path", event.ID, job.ID)

@@ -36,11 +36,11 @@ func validateTemplates(e EventDef) error {
 				if err := validateExpression(value, values); err != nil {
 					return err
 				}
-				if !safeMember(placeholder.ReplaceAllString(value, "x")) {
+				if value != "" && !safeMember(placeholder.ReplaceAllString(value, "x")) {
 					return fmt.Errorf("unsafe ZIP/output template")
 				}
 			}
-			if !safeFilename(placeholder.ReplaceAllString(x.FilenameTemplate, "x"), x.Format) {
+			if x.FilenameTemplate != "" && !safeFilename(placeholder.ReplaceAllString(x.FilenameTemplate, "x"), x.Format) {
 				return fmt.Errorf("invalid extraction filename or extension")
 			}
 		}

@@ -104,7 +104,7 @@ func TestReviewDateAndFilenameRegressions(t *testing.T) {
 	if _, _, err := e.Resolve(date, map[string]any{"exchangeName": "BSE"}); err == nil {
 		t.Fatal("missing required date accepted")
 	}
-	for _, name := range []string{"file.csv", "dir/file.json", "file\t.json", "file\u0085.json"} {
+	for _, name := range []string{"{isin_code}.csv", "dir/{isin_code}.json", "{isin_code}\t.json", "{isin_code}\u0085.json"} {
 		c := production(t)
 		c.Events[1].Jobs[0].Response.FilenameTemplate = name
 		if err := c.Validate(); err == nil {
@@ -115,5 +115,28 @@ func TestReviewDateAndFilenameRegressions(t *testing.T) {
 	c.Events[0].Jobs[0].Response.Extraction.FilenameTemplate = "dir/file.csv"
 	if err := c.Validate(); err == nil {
 		t.Fatal("extraction subdirectory accepted")
+	}
+}
+
+func TestOptionalFilenamePrecedence(t *testing.T) {
+	c := production(t)
+	e := &c.Events[0]
+	e.Jobs[0].Response.Extraction.FilenameTemplate = ""
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	_, jobs, err := e.Resolve(time.Date(2026, 9, 21, 14, 30, 0, 0, time.UTC), map[string]any{"exchangeName": "BSE"})
+	if err != nil || jobs[0].Filename != "fgroup21092026.csv" {
+		t.Fatal(jobs, err)
+	}
+	for _, tc := range []struct{ url, name string }{
+		{"https://example.org/Source%20File.CSV?date=1", "Source File.CSV"},
+		{"https://example.org/api", ""},
+	} {
+		job := Job{ID: "prices", Request: Request{URLTemplate: tc.url}, Response: Response{Format: "csv"}}
+		result, err := resolveJob(job, nil, time.Now())
+		if err != nil || result.Filename != tc.name {
+			t.Fatal(result, err)
+		}
 	}
 }
