@@ -8,13 +8,17 @@ def check(text):
     if not lines or lines[0] != "mode: atomic":
         raise ValueError("expected atomic coverage profile")
     covered = total = 0
-    seen = set()
+    blocks = {}
     for line in lines[1:]:
         location, statements, count = line.split()
         statements, count = int(statements), int(count)
-        if location in seen or statements < 0 or count < 0:
-            raise ValueError("invalid or duplicate coverage block")
-        seen.add(location)
+        if statements < 0 or count < 0:
+            raise ValueError("invalid coverage block")
+        previous = blocks.get(location)
+        if previous is not None and previous[0] != statements:
+            raise ValueError("duplicate coverage block has conflicting statement counts")
+        blocks[location] = (statements, max(count, previous[1] if previous else 0))
+    for statements, count in blocks.values():
         total += statements
         if count:
             covered += statements

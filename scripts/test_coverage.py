@@ -7,7 +7,8 @@ class CoverageTest(unittest.TestCase):
             with self.assertRaises(ValueError): check(text)
         self.assertEqual(check("mode: atomic\nx:1 96 1\nx:2 4 0"), (96,100))
     def test_invalid(self):
-        for text in ["mode: set", "mode: atomic\nx:1 -1 1", "mode: atomic\nx:1 1 -1", "mode: atomic\nx:1 1 1\nx:1 1 1"]:
+        for text in ["mode: set", "mode: atomic\nx:1 -1 1", "mode: atomic\nx:1 1 -1", "mode: atomic\nx:1 1 1\nx:1 2 1"]:
             with self.assertRaises(ValueError): check(text)
+        self.assertEqual(check("mode: atomic\nx:1 1 0\nx:1 1 1"), (1, 1))
 
 if __name__ == "__main__": unittest.main()

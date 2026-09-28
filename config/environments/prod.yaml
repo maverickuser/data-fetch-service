@@ -1,0 +1,4 @@
+schema_version: 1
+environment: prod
+aws_region: ap-south-1
+resource_prefix: data-fetch-service

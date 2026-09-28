@@ -40,6 +40,7 @@ Implemented commands:
 - `make coverage-check`: enforce coverage strictly greater than 95% from that profile.
 Mocked API integration commands will be added with the first implemented HTTP boundary; none exists in the foundation increment.
 - `make build`: build implemented production entry points/packages.
+- `make configcheck`: validate the effective event configuration and print its revision.
 - `make check-docs`: validate repository documentation links.
 - `make check-contract`: verify supplied OpenAPI JSON/YAML equivalence (Ruby standard library).
 - `make check`: run all implemented deterministic gates.
