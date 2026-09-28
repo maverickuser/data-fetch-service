@@ -5,7 +5,7 @@ Branch: `stack/02-contracts`. No remote PR or AWS resources created. Foundation 
 | Increment | Status |
 |---|---|
 | 01 Foundation | Implemented locally; separate agent reviewed staged content with no blockers |
-| 02 Configuration and event contracts | Implemented locally; final independent review pending |
+| 02 Configuration and event contracts | Implemented locally; current committed-head review verdict is recorded under `.reports/` |
 | 03–12 | Planned; not implemented |
 
 Verified locally: gofmt/vet/staticcheck/errcheck; race/unit coverage greater than 95%; weighted-coverage regression checks; native and Linux/arm64 builds; configuration validation; documentation links; OpenAPI JSON/YAML parity. Current reports are in `.reports/`. CI YAML is prepared but has not run on GitHub.
