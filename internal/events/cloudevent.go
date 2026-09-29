@@ -41,6 +41,7 @@ type Normalized struct {
 	EventType  string
 	Inputs     map[string]any
 	Original   json.RawMessage
+	Force      bool
 }
 
 // ParseCloudEvent validates a structured JSON CloudEvent and its business data.

@@ -275,3 +275,33 @@ func TestAdmissionReadFailuresNeverBecomeNotFound(t *testing.T) {
 		}
 	}
 }
+
+func TestReadRequestIsReadOnlyAndRejectsCorruption(t *testing.T) {
+	m := newMemory()
+	c := NewCoordinator(New(m), func() time.Time { return m.now })
+	ctx := context.Background()
+	r := request(t, m, "one", "run")
+	if _, err := c.ReadRequest(ctx, "../bad"); err == nil {
+		t.Fatal("invalid request path")
+	}
+	if _, err := c.ReadRequest(ctx, "one"); !errors.Is(err, ErrNotFound) {
+		t.Fatal(err)
+	}
+	if _, err := c.EnsureRequest(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	version := m.version
+	actual, err := c.ReadRequest(ctx, "one")
+	if err != nil || actual.CandidateRunID != "run" || m.version != version {
+		t.Fatal(actual, err)
+	}
+	m.objects["requests/one/intent.json"] = Object{Data: []byte("{"), Modified: m.now}
+	if _, err := c.ReadRequest(ctx, "one"); err == nil {
+		t.Fatal("invalid JSON accepted")
+	}
+	r.RequestKey = "other"
+	replaceRecord(t, m, "requests/one/intent.json", r)
+	if _, err := c.ReadRequest(ctx, "one"); !errors.Is(err, ErrIntegrity) {
+		t.Fatal(err)
+	}
+}

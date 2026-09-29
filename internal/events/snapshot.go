@@ -22,6 +22,7 @@ type Snapshot struct {
 	Inputs         map[string]string    `json:"inputs"`
 	Jobs           []config.ResolvedJob `json:"jobs"`
 	Config         config.Config        `json:"config"`
+	Force          bool                 `json:"force"`
 }
 
 // BuildSnapshot returns detached immutable JSON with resolved jobs and conflict identities.
@@ -63,7 +64,7 @@ func BuildSnapshot(cfg config.Config, event Normalized, runID string) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(Snapshot{1, runID, key, execution, payloadHash, cfg.Revision(), event, inputs, jobs, cfg})
+	return json.Marshal(Snapshot{SchemaVersion: 1, RunID: runID, RequestKey: key, ExecutionKey: execution, PayloadHash: payloadHash, ConfigRevision: cfg.Revision(), Event: event, Inputs: inputs, Jobs: jobs, Config: cfg, Force: event.Force})
 }
 
 // digest hashes canonical JSON with stable map ordering.

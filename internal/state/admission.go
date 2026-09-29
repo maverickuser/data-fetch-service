@@ -222,3 +222,22 @@ func (c *Coordinator) RequestResolution(ctx context.Context, requestKey string) 
 	}
 	return receipt, nil
 }
+
+// ReadRequest loads the pinned intent without creating or repairing admission state.
+func (c *Coordinator) ReadRequest(ctx context.Context, requestKey string) (RequestIntent, error) {
+	if !safeRunID(requestKey) {
+		return RequestIntent{}, fmt.Errorf("invalid request key")
+	}
+	object, err := c.store.Read(ctx, "requests/"+requestKey+"/intent.json", c.now())
+	if err != nil {
+		return RequestIntent{}, err
+	}
+	var r RequestIntent
+	if err := json.Unmarshal(object.Data, &r); err != nil {
+		return RequestIntent{}, err
+	}
+	if r.RequestKey != requestKey {
+		return RequestIntent{}, ErrIntegrity
+	}
+	return r, validateRequest(r)
+}

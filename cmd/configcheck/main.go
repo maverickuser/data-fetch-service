@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/maverickuser/data-fetch-service/internal/config"
+	"github.com/maverickuser/data-fetch-service/internal/events"
 )
 
 var exitProcess = os.Exit
@@ -44,6 +46,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	cfg.DeploymentCommit = *commit
+	mappingData, err := os.ReadFile(filepath.Join(filepath.Dir(*path), "native-events.yaml"))
+	if err != nil {
+		return err
+	}
+	if _, err := events.LoadMappings(mappingData, cfg); err != nil {
+		return err
+	}
 	_, err = fmt.Fprintf(stdout, "valid schema_version=%d events=%d revision=%s\n", cfg.SchemaVersion, len(cfg.Events), cfg.Revision())
 	return err
 }

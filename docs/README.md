@@ -5,6 +5,7 @@
 - [Implementation plan](plans/data-fetch-service-implementation-plan.md) and [status](plans/implementation-status.md): sequence and evidence.
 - [Implementation context](plans/data-fetch-service-implementation-context-spec.md): supplied and pending inputs.
 - [Go standards](engineering/go-standards.md) and [review policy](engineering/pr-review.md): engineering gates.
+- [Admission runtime and API](runtime.md): implemented entry points, deployment inputs and API limits.
 - [Original fetch specification](specs/data-puller-service-spec.md): historical; LLD supersedes conflicts.
 - [Processor LLD](specs/structured-file-processing-lld.md) and [processor specification](specs/structured-file-processing-spec.md): external references. Processor LLD is preserved unchanged at user request; authoritative admission details are in OpenAPI.
 

@@ -8,14 +8,14 @@ import (
 
 // RuleMapping binds an approved native rule or event signature to configured inputs.
 type RuleMapping struct {
-	RuleARN      string
-	Account      string
-	Region       string
-	Source       string
-	DetailType   string
-	EventType    string
-	Inputs       map[string]any
-	DetailFields map[string]string // Input name to top-level detail field name.
+	RuleARN      string            `yaml:"rule_arn"`
+	Account      string            `yaml:"account"`
+	Region       string            `yaml:"region"`
+	Source       string            `yaml:"source"`
+	DetailType   string            `yaml:"detail_type"`
+	EventType    string            `yaml:"event_type"`
+	Inputs       map[string]any    `yaml:"inputs"`
+	DetailFields map[string]string `yaml:"detail_fields"` // Input name to top-level detail field name.
 }
 
 // Record preserves each SQS transport identifier and independent decoding outcome.

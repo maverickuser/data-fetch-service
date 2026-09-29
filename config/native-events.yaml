@@ -1,0 +1,2 @@
+# New schedules use CloudEvents. Add explicitly approved legacy/native producers here.
+mappings: []

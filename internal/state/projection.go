@@ -18,7 +18,7 @@ type RunView struct {
 	Sequence  uint64          `json:"sequence"`
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`
-	Snapshot  json.RawMessage `json:"snapshot"`
+	Snapshot  json.RawMessage `json:"snapshot,omitempty"`
 }
 
 // HistoryPage is a bounded immutable history page with an opaque continuation token.
