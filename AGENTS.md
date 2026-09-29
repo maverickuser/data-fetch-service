@@ -38,7 +38,7 @@ Implemented commands:
 - `make lint`: check-only gofmt, go vet, staticcheck and errcheck.
 - `make test-unit`: isolated unit tests with race detection and unit-only coverage profile.
 - `make coverage-check`: enforce coverage strictly greater than 95% from that profile.
-- `make test-integration`: exercise the real S3 SDK and state repository with a mocked HTTP transport. API integration coverage grows with the application handlers.
+- `make test-integration`: exercise the real S3 SDK with mocked HTTP and BSE/NSDL event-to-state composition with fake storage/queues. API integration coverage grows with the application handlers.
 - `make build`: build implemented production entry points/packages.
 - `make configcheck`: validate the effective event configuration and print its revision.
 - `make check-docs`: validate repository documentation links.

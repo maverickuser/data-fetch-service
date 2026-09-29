@@ -17,7 +17,7 @@ coverage-check:
 	python3 scripts/test_coverage.py
 	python3 scripts/coverage.py .reports/unit.cover
 test-integration:
-	$(GO) test -race -tags=integration ./internal/state -run '^TestSDK'
+	$(GO) test -race -tags=integration ./internal/state -run '^(TestSDK|TestStateComposition)'
 build:
 	$(GO) build ./...
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build ./...

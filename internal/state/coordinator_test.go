@@ -88,6 +88,17 @@ func TestConcurrentCommitReservesOnlyOneSequence(t *testing.T) {
 
 func claim(t *testing.T, c *Coordinator, m *memoryObjects) Lease {
 	t.Helper()
+	current, _, loadErr := c.Load(context.Background(), coordKey)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if current.Dispatch != nil {
+		lease, err := c.ClaimDispatched(context.Background(), coordKey, "run", current.Dispatch.Queue, "invocation", m.now.Add(time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return lease
+	}
 	lease, err := c.Claim(context.Background(), coordKey, "run", "invocation", m.now.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
