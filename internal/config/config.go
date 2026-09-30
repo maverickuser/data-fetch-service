@@ -41,6 +41,9 @@ type Defaults struct {
 	MaxZipEntries           int   `yaml:"max_zip_entries" json:"max_zip_entries"`
 	MaxCompressionRatio     int   `yaml:"max_compression_ratio" json:"max_compression_ratio"`
 	MaxValidationTokenBytes int64 `yaml:"max_validation_token_bytes" json:"max_validation_token_bytes"`
+	MaxJSONDepth            int   `yaml:"max_json_depth" json:"max_json_depth"`
+	MaxZipMetadataBytes     int64 `yaml:"max_zip_metadata_bytes" json:"max_zip_metadata_bytes"`
+	MaxTempBytes            int64 `yaml:"max_temp_bytes" json:"max_temp_bytes"`
 }
 
 // Processor configures the private downstream admission endpoint.
@@ -178,6 +181,9 @@ func mergeMaps(base, overlay map[string]any) {
 
 // Validate rejects unsafe, incomplete, or internally inconsistent configuration.
 func (c Config) Validate() error {
+	if c.Defaults.MaxJSONDepth < 1 || c.Defaults.MaxJSONDepth > 1024 || c.Defaults.MaxZipMetadataBytes < 1 || c.Defaults.MaxTempBytes < c.Defaults.MaxDownloadBytes {
+		return fmt.Errorf("invalid parser or temporary storage limits")
+	}
 	if c.SchemaVersion != 1 {
 		return fmt.Errorf("schema_version must be 1")
 	}

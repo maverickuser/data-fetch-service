@@ -9,6 +9,9 @@ defaults:
   max_zip_entries: 10000
   max_compression_ratio: 100
   max_validation_token_bytes: 1048576
+  max_json_depth: 128
+  max_zip_metadata_bytes: 8388608
+  max_temp_bytes: 3221225472
 processor:
   enabled: false
   url: https://processor.example.invalid/v1/event-ingestions

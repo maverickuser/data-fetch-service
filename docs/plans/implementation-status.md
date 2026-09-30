@@ -1,6 +1,6 @@
 # Implementation status
 
-Branch: `stack/04-admission`. No remote PR or AWS resources created. Foundation committed as `e4bbe13`; its separate agent review covered staged content, not the committed head. PR 02 is approved through `cd31c10` and PR 03 through `8763839`; exact-head local review records are under `.reports/`.
+Branch: `stack/05-acquisition`. No remote PR or AWS resources created. Foundation committed as `e4bbe13`; its separate agent review covered staged content, not the committed head. PR 02 is approved through `cd31c10`, PR 03 through `8763839`, and PR 04 through `eefd677`; exact-head local review records are under `.reports/`.
 
 | Increment | Status |
 |---|---|
@@ -8,7 +8,8 @@ Branch: `stack/04-admission`. No remote PR or AWS resources created. Foundation 
 | 02 Configuration and event contracts | Implemented locally; current committed-head review verdict is recorded under `.reports/` |
 | 03 State and coordination | Implemented locally; committed-head review evidence under `.reports/` |
 | 04 Admission and initial REST reads | Implemented locally; committed-head review evidence under `.reports/` |
-| 05–12 | Planned; not implemented |
+| 05 Acquisition and artifact storage | Implemented locally; independent worktree review passed; committed-head verdict tracked under `.reports/` |
+| 06–12 | Planned; not implemented |
 
 Verified locally: gofmt/vet/staticcheck/errcheck; race/unit coverage greater than 95%; weighted-coverage regression checks; native and Linux/arm64 builds; configuration validation; documentation links; OpenAPI JSON/YAML parity. Current reports are in `.reports/`. CI YAML is prepared but has not run on GitHub.
 
@@ -20,4 +21,6 @@ PR 03 now includes serialized admission/request resolution, durable pull/deliver
 
 PR 04 adds API/admission Lambda entry points, SDK SQS publishing, partial batch failures with durable invalid-event receipts, manual force/idempotency, and the initial read routes. First-request races rebind to the winning request's configuration, preserving the original manual logical date or external producer time. HTTP integration tests cover races across midnight/deployments, queue-reply loss, request replay/conflicts, read routes and listing pagination. Latest unit coverage: 1242/1284 statements (96.73%); integration coverage is excluded.
 
-Next: PR 05 acquisition and artifact storage. Pull/delivery workers, automatic retry orchestration, manual recovery routes, Terraform and deployment remain later work. Automatic retry transfer must preserve the active claim using its own durable intent; ordinary failed transitions release it and must not be used as the first step of automatic retry. Live AWS/source tests are deferred until release.
+PR 05 adds bounded HTTPS downloads, streaming CSV/JSON validation, guarded ZIP selection, temporary-disk reservations, per-job attempt recording/retries, and conditional S3 multipart artifact storage. Integration tests exercise BSE/NSDL through the real SDK with mocked HTTP and verify invalid JSON aborts without completing an object. Latest unit coverage: 1849/1937 statements (95.46%); all `make check` gates pass. See [the local PR description](acquisition-pr.md). Independent review fixes include ZIP allocation bounds, cancellation, local-write classification, and cleanup accounting. Independent worktree review passed; the committed-head verdict is tracked separately under `.reports/`.
+
+Next: PR 06 pull orchestration and manifests, after PR 05 committed-head approval. Pull/delivery workers, automatic retry orchestration, manual recovery routes, Terraform and deployment remain later work. Automatic retry transfer must preserve the active claim using its own durable intent; ordinary failed transitions release it and must not be used as the first step of automatic retry. Live AWS/source tests are deferred until release.

@@ -110,8 +110,12 @@ func resolveJob(job Job, inputs map[string]string, date time.Time) (ResolvedJob,
 	if err := validateHTTPS(job.Request.URLTemplate); err != nil {
 		return ResolvedJob{}, err
 	}
-	parts := strings.Split(u.Path, "/")
+	parts := strings.Split(u.EscapedPath(), "/")
 	for i, part := range parts {
+		part, err = url.PathUnescape(part)
+		if err != nil {
+			return ResolvedJob{}, err
+		}
 		parts[i], err = RenderTemplate(part, values, date)
 		if err != nil {
 			return ResolvedJob{}, err

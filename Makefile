@@ -19,6 +19,7 @@ coverage-check:
 test-integration:
 	$(GO) test -race -tags=integration ./internal/state -run '^(TestSDK|TestStateComposition)'
 	$(GO) test -race -tags=integration ./internal/api -run '^TestHTTPComposition'
+	$(GO) test -race -tags=integration ./internal/acquisition -run '^TestAcquisitionSDKComposition'
 build:
 	$(GO) build ./...
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build ./...
