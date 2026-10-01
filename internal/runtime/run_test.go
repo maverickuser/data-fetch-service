@@ -22,6 +22,8 @@ func dependencies(t *testing.T) (Dependencies, *int) {
 			return "state"
 		case "PULL_QUEUE_URL", "DELIVERY_QUEUE_URL":
 			return "https://sqs.example/queue"
+		case "ARTIFACT_BUCKET":
+			return "artifacts"
 		}
 		return ""
 	}, LoadAWS: func(_ context.Context, options ...func(*awsconfig.LoadOptions) error) (aws.Config, error) {
@@ -45,7 +47,7 @@ func dependencies(t *testing.T) (Dependencies, *int) {
 }
 
 func TestRuntimeBuildsBothHandlers(t *testing.T) {
-	for _, kind := range []string{"api", "admission"} {
+	for _, kind := range []string{"api", "admission", "pull"} {
 		d, started := dependencies(t)
 		if err := Start(context.Background(), kind, d); err != nil || *started != 1 {
 			t.Fatal(kind, err, *started)
@@ -129,5 +131,19 @@ func TestRuntimeRegionOverrideAndDefault(t *testing.T) {
 		if err := Start(context.Background(), "api", d); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestRuntimePullRequiresArtifactBucket(t *testing.T) {
+	d, started := dependencies(t)
+	environment := d.Env
+	d.Env = func(name string) string {
+		if name == "ARTIFACT_BUCKET" {
+			return ""
+		}
+		return environment(name)
+	}
+	if err := Start(context.Background(), "pull", d); err == nil || *started != 0 {
+		t.Fatal(err, *started)
 	}
 }

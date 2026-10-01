@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"os"
 	"time"
 
@@ -14,12 +15,15 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/maverickuser/data-fetch-service/internal/acquisition"
 	"github.com/maverickuser/data-fetch-service/internal/admission"
 	"github.com/maverickuser/data-fetch-service/internal/api"
 	"github.com/maverickuser/data-fetch-service/internal/config"
 	"github.com/maverickuser/data-fetch-service/internal/events"
+	"github.com/maverickuser/data-fetch-service/internal/pull"
 	"github.com/maverickuser/data-fetch-service/internal/queue"
 	"github.com/maverickuser/data-fetch-service/internal/state"
+	"github.com/maverickuser/data-fetch-service/internal/storage"
 )
 
 // Dependencies makes cold-start assembly testable without credentials or a Lambda loop.
@@ -37,7 +41,7 @@ func Run(kind string) error {
 
 // Start validates all local/deployment inputs before constructing network clients.
 func Start(ctx context.Context, kind string, d Dependencies) error {
-	if kind != "api" && kind != "admission" {
+	if kind != "api" && kind != "admission" && kind != "pull" {
 		return fmt.Errorf("unknown Lambda kind")
 	}
 	base, err := d.ReadFile("config/events.yaml")
@@ -53,8 +57,8 @@ func Start(ctx context.Context, kind string, d Dependencies) error {
 		return err
 	}
 	cfg.DeploymentCommit = d.Env("DEPLOYMENT_COMMIT")
-	bucket, pull, delivery := d.Env("STATE_BUCKET"), d.Env("PULL_QUEUE_URL"), d.Env("DELIVERY_QUEUE_URL")
-	if cfg.DeploymentCommit == "" || bucket == "" || pull == "" || delivery == "" {
+	bucket, pullQueueURL, delivery := d.Env("STATE_BUCKET"), d.Env("PULL_QUEUE_URL"), d.Env("DELIVERY_QUEUE_URL")
+	if cfg.DeploymentCommit == "" || bucket == "" || pullQueueURL == "" || delivery == "" {
 		return fmt.Errorf("deployment commit, state bucket and queue URLs required")
 	}
 	mappingData, err := d.ReadFile("config/native-events.yaml")
@@ -83,9 +87,23 @@ func Start(ctx context.Context, kind string, d Dependencies) error {
 	}
 	store := state.New(objects)
 	coordinator := state.NewCoordinator(store, time.Now)
-	publisher := &queue.Publisher{Client: sqs.NewFromConfig(awsCfg), URLs: map[string]string{"pull": pull, "delivery": delivery}}
+	publisher := &queue.Publisher{Client: sqs.NewFromConfig(awsCfg), URLs: map[string]string{"pull": pullQueueURL, "delivery": delivery}}
 	service := &admission.Service{Config: cfg, Coordinator: coordinator, Publisher: publisher, Now: time.Now, NewID: newID}
-	if kind == "admission" {
+	if kind == "pull" {
+		artifactBucket := d.Env("ARTIFACT_BUCKET")
+		if artifactBucket == "" {
+			return fmt.Errorf("artifact bucket required for pull")
+		}
+		limits := acquisition.ConfiguredLimits(cfg.Defaults)
+		fetcher := &acquisition.Fetcher{Client: acquisition.GuardedClient(net.DefaultResolver, &net.Dialer{Timeout: 10 * time.Second}), Storage: &storage.Multipart{Client: s3.NewFromConfig(awsCfg), Bucket: artifactBucket, MaxBytes: cfg.Defaults.MaxExtractedBytes}, Recorder: acquisition.StateRecorder{Store: store}, Budget: acquisition.NewBudget(cfg.Defaults.MaxTempBytes), Limits: limits, TempRoot: "/tmp", Now: time.Now}
+		worker := &pull.Service{Repository: store, Coordinator: coordinator, ManifestStorage: fetcher.Storage, Publisher: publisher, ArtifactBucket: artifactBucket, Now: time.Now, FetcherForSnapshot: func(defaults config.Defaults) pull.Fetcher {
+			pinned := *fetcher
+			pinned.Limits = acquisition.ConfiguredLimits(defaults)
+			pinned.Budget = acquisition.NewBudget(defaults.MaxTempBytes)
+			return &pinned
+		}}
+		d.Start((&pull.Ingress{Runner: worker, Store: store, NewToken: newID}).Handle)
+	} else if kind == "admission" {
 		handler := &admission.Ingress{Service: service, Store: store, Mappings: mappings}
 		d.Start(handler.Handle)
 	} else {

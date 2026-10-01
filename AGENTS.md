@@ -1,6 +1,6 @@
 # Agent instructions — data-fetch-service
 
-Active repository guidance. Local implementation includes admission/read APIs and per-job acquisition/artifact storage; see the status file for review status. Do not edit the processing-service LLD; its copy is a read-only external reference.
+Active repository guidance. Local implementation includes admission/read APIs, per-job acquisition, and complete-event pull orchestration; see the status file for review status. Do not edit the processing-service LLD; its copy is a read-only external reference.
 
 ## Purpose and reading order
 
@@ -39,7 +39,7 @@ Implemented commands:
 - `make test-unit`: isolated unit tests with race detection and unit-only coverage profile.
 - `make coverage-check`: enforce coverage strictly greater than 95% from that profile.
 - `make test-integration`: exercise the real S3 SDK with mocked HTTP, BSE/NSDL event-to-state and source-to-artifact composition, and HTTP admission/read routes with real application logic and fake storage/queues. Integration coverage is separate from the unit gate.
-- `make build`: build implemented production entry points/packages.
+- `make build`: build implemented production entry points/packages, including Pull Lambda.
 - `make configcheck`: validate the effective event configuration and print its revision.
 - `make check-docs`: validate repository documentation links.
 - `make check-contract`: verify supplied OpenAPI JSON/YAML equivalence (Ruby standard library).
