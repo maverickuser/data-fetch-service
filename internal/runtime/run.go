@@ -95,12 +95,10 @@ func Start(ctx context.Context, kind string, d Dependencies) error {
 			return fmt.Errorf("artifact bucket required for pull")
 		}
 		limits := acquisition.ConfiguredLimits(cfg.Defaults)
-		fetcher := &acquisition.Fetcher{Client: acquisition.GuardedClient(net.DefaultResolver, &net.Dialer{Timeout: 10 * time.Second}), Storage: &storage.Multipart{Client: s3.NewFromConfig(awsCfg), Bucket: artifactBucket, MaxBytes: cfg.Defaults.MaxExtractedBytes}, Recorder: acquisition.StateRecorder{Store: store}, Budget: acquisition.NewBudget(cfg.Defaults.MaxTempBytes), Limits: limits, TempRoot: "/tmp", Now: time.Now}
+		artifactClient := s3.NewFromConfig(awsCfg)
+		fetcher := &acquisition.Fetcher{Client: acquisition.GuardedClient(net.DefaultResolver, &net.Dialer{Timeout: 10 * time.Second}), Storage: &storage.Multipart{Client: artifactClient, Bucket: artifactBucket, MaxBytes: cfg.Defaults.MaxExtractedBytes}, Recorder: acquisition.StateRecorder{Store: store}, Budget: acquisition.NewBudget(cfg.Defaults.MaxTempBytes), Limits: limits, TempRoot: "/tmp", Now: time.Now}
 		worker := &pull.Service{Repository: store, Coordinator: coordinator, ManifestStorage: fetcher.Storage, Publisher: publisher, ArtifactBucket: artifactBucket, Now: time.Now, FetcherForSnapshot: func(defaults config.Defaults) pull.Fetcher {
-			pinned := *fetcher
-			pinned.Limits = acquisition.ConfiguredLimits(defaults)
-			pinned.Budget = acquisition.NewBudget(defaults.MaxTempBytes)
-			return &pinned
+			return pinnedPullFetcher(fetcher, artifactClient, artifactBucket, defaults)
 		}}
 		d.Start((&pull.Ingress{Runner: worker, Store: store, NewToken: newID}).Handle)
 	} else if kind == "admission" {
@@ -112,6 +110,15 @@ func Start(ctx context.Context, kind string, d Dependencies) error {
 		d.Start(adapter.Handle)
 	}
 	return nil
+}
+
+// pinnedPullFetcher uses admitted source, disk, and S3 byte limits for a queued run.
+func pinnedPullFetcher(base *acquisition.Fetcher, client *s3.Client, bucket string, defaults config.Defaults) *acquisition.Fetcher {
+	pinned := *base
+	pinned.Limits = acquisition.ConfiguredLimits(defaults)
+	pinned.Budget = acquisition.NewBudget(defaults.MaxTempBytes)
+	pinned.Storage = &storage.Multipart{Client: client, Bucket: bucket, MaxBytes: defaults.MaxExtractedBytes}
+	return &pinned
 }
 
 // newID generates an independent cryptographic run/request identifier.

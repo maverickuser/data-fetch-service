@@ -9,6 +9,10 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/maverickuser/data-fetch-service/internal/acquisition"
+	"github.com/maverickuser/data-fetch-service/internal/config"
+	"github.com/maverickuser/data-fetch-service/internal/storage"
 )
 
 func dependencies(t *testing.T) (Dependencies, *int) {
@@ -145,5 +149,24 @@ func TestRuntimePullRequiresArtifactBucket(t *testing.T) {
 	}
 	if err := Start(context.Background(), "pull", d); err == nil || *started != 0 {
 		t.Fatal(err, *started)
+	}
+}
+
+func TestPinnedPullFetcherKeepsAdmittedStorageLimit(t *testing.T) {
+	client := s3.New(s3.Options{Region: "ap-south-1"})
+	current := &acquisition.Fetcher{Storage: &storage.Multipart{Client: client, Bucket: "artifacts", MaxBytes: 100}, Limits: acquisition.Limits{MaxExtractedBytes: 100}, Budget: acquisition.NewBudget(100)}
+	admitted := config.Defaults{MaxExtractedBytes: 200, MaxDownloadBytes: 80, MaxTempBytes: 300, MaxValidationTokenBytes: 10, MaxJSONDepth: 8, MaxZipEntries: 2, MaxZipMetadataBytes: 128, MaxCompressionRatio: 50, SourceMaxAttempts: 3, RequestTimeoutSeconds: 10}
+	pinned := pinnedPullFetcher(current, client, "artifacts", admitted)
+	artifactStore, ok := pinned.Storage.(*storage.Multipart)
+	if !ok || artifactStore.MaxBytes != 200 || artifactStore.Bucket != "artifacts" || artifactStore.Client != client || pinned.Limits.MaxExtractedBytes != 200 || current.Storage.(*storage.Multipart).MaxBytes != 100 {
+		t.Fatal("deployment limit replaced admitted storage limit")
+	}
+	release, err := pinned.Budget.Acquire(context.Background(), 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if _, err := current.Budget.Acquire(context.Background(), 300); err == nil {
+		t.Fatal("base budget mutated")
 	}
 }
