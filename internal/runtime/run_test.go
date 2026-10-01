@@ -51,7 +51,7 @@ func dependencies(t *testing.T) (Dependencies, *int) {
 }
 
 func TestRuntimeBuildsBothHandlers(t *testing.T) {
-	for _, kind := range []string{"api", "admission", "pull", "delivery"} {
+	for _, kind := range []string{"api", "admission", "pull", "delivery", "reconciler"} {
 		d, started := dependencies(t)
 		if err := Start(context.Background(), kind, d); err != nil || *started != 1 {
 			t.Fatal(kind, err, *started)
@@ -139,7 +139,7 @@ func TestRuntimeRegionOverrideAndDefault(t *testing.T) {
 }
 
 func TestRuntimePullRequiresArtifactBucket(t *testing.T) {
-	for _, kind := range []string{"pull", "delivery"} {
+	for _, kind := range []string{"pull", "delivery", "reconciler"} {
 		d, started := dependencies(t)
 		environment := d.Env
 		d.Env = func(name string) string {

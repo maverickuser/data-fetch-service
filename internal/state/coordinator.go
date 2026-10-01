@@ -49,6 +49,7 @@ type Coordination struct {
 	AcceptedBaseline *Baseline          `json:"accepted_baseline,omitempty"`
 	Admission        *AdmissionDecision `json:"pending_admission,omitempty"`
 	Dispatch         *Dispatch          `json:"dispatch,omitempty"`
+	Retry            *RetryIntent       `json:"pending_retry,omitempty"`
 }
 
 // Lease fences authoritative writes by run, generation and invocation identity.
@@ -95,7 +96,7 @@ func (c *Coordinator) Claim(ctx context.Context, key, runID, token string, deadl
 	if err != nil {
 		return Lease{}, err
 	}
-	if current.Dispatch != nil || current.Admission != nil || current.Pending != nil || current.ActiveRunID != runID || runID == "" || current.Phase.Terminal() {
+	if current.Dispatch != nil || current.Admission != nil || current.Pending != nil || current.Retry != nil || current.ActiveRunID != runID || runID == "" || current.Phase.Terminal() {
 		return Lease{}, ErrConflict
 	}
 	if current.OwnerToken != "" {
@@ -122,7 +123,7 @@ func (c *Coordinator) Commit(ctx context.Context, key string, lease Lease, next 
 	if current.ActiveRunID != lease.RunID || current.Generation != lease.Generation || current.OwnerToken != lease.Token || lease.Token == "" || !c.now().Before(current.OwnerDeadline) {
 		return ErrConflict
 	}
-	if current.Admission != nil || current.Pending != nil {
+	if current.Admission != nil || current.Pending != nil || current.Retry != nil {
 		return ErrConflict
 	}
 	if next.RunID != lease.RunID || !safeRunID(next.RunID) || next.Sequence != current.LastSequence+1 || next.At.IsZero() || !allowedTransition(current.Phase, next.Phase) {
@@ -146,6 +147,9 @@ func (c *Coordinator) Repair(ctx context.Context, key string) error {
 	}
 	if current.Admission != nil {
 		return c.repairAdmission(ctx, key, current, etag)
+	}
+	if current.Retry != nil {
+		return c.repairRetry(ctx, key, current, etag)
 	}
 	if current.Pending == nil {
 		return nil

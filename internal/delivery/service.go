@@ -33,6 +33,7 @@ type ManifestReader interface {
 // Coordinator fences a delivery owner and commits recoverable terminal transitions.
 type Coordinator interface {
 	ClaimDispatched(context.Context, string, string, string, string, time.Time) (state.Lease, error)
+	ClaimExpiredDelivery(context.Context, string, string, string, time.Time) (state.Lease, error)
 	Commit(context.Context, string, state.Lease, state.Transition) error
 	Load(context.Context, string) (state.Coordination, string, error)
 	Repair(context.Context, string) error
@@ -55,6 +56,9 @@ type Service struct {
 }
 
 var ErrStaleDeliveryMessage = errors.New("delivery message already owned or completed")
+var ErrRetryNotReady = errors.New("processor Retry-After has not elapsed")
+var errDeliveryFinalized = errors.New("delivery terminal state recorded")
+var errInvalidSubmission = errors.New("invalid processor submission")
 
 // Run reserves each HTTP attempt before sending and commits success only after durable 202 evidence.
 func (s *Service) Run(ctx context.Context, runID, token string, deadline time.Time) error {
@@ -93,36 +97,12 @@ func (s *Service) Run(ctx context.Context, runID, token string, deadline time.Ti
 	if !snapshot.Config.Processor.Enabled {
 		return s.fail(ctx, key, lease, runID, "PROCESSOR_NOT_CONFIGURED")
 	}
-	manifestObject, err := s.Repository.Read(ctx, fmt.Sprintf("runs/%s/history/%020d.json", runID, current.LastSequence), s.Now())
+	body, err := s.prepareSubmission(ctx, snapshot, current.LastSequence)
 	if err != nil {
+		if errors.Is(err, errInvalidSubmission) {
+			return s.fail(ctx, key, lease, runID, "INVALID_SUBMISSION")
+		}
 		return err
-	}
-	var handoff state.Transition
-	if err := json.Unmarshal(manifestObject.Data, &handoff); err != nil {
-		return err
-	}
-	var details struct {
-		Bucket      string `json:"bucket"`
-		Key         string `json:"manifest_key"`
-		Fingerprint string `json:"dataset_fingerprint"`
-	}
-	if handoff.Phase != domain.DeliveryPending || json.Unmarshal(handoff.Details, &details) != nil || details.Bucket != s.ArtifactBucket || details.Key != "runs/"+runID+"/manifest.json" {
-		return state.ErrIntegrity
-	}
-	manifestBytes, err := s.Manifests.Read(ctx, details.Key)
-	if err != nil {
-		return err
-	}
-	var manifest pull.Manifest
-	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
-		return err
-	}
-	if manifest.Data.RunID != runID || manifest.Data.ConfigRevision != snapshot.ConfigRevision || manifest.Data.DatasetFingerprint != details.Fingerprint || manifest.Data.EventID != snapshot.Event.EventID {
-		return state.ErrIntegrity
-	}
-	body, err := BuildSubmission(manifest, Reference{Bucket: details.Bucket, Key: details.Key})
-	if err != nil {
-		return s.fail(ctx, key, lease, runID, "INVALID_SUBMISSION")
 	}
 	submissionKey := "runs/" + runID + "/delivery/submission.json"
 	if err := s.Repository.Create(ctx, submissionKey, body); err != nil {
@@ -132,8 +112,52 @@ func (s *Service) Run(ctx context.Context, runID, token string, deadline time.Ti
 	if maxAttempts < 1 || maxAttempts > 3 {
 		return state.ErrIntegrity
 	}
-	allUnknown := true
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+	return s.deliverAttempts(ctx, key, lease, snapshot, body, 1, true, deadline)
+}
+
+// prepareSubmission rebuilds the same bytes from the pinned handoff and completed manifest.
+func (s *Service) prepareSubmission(ctx context.Context, snapshot events.Snapshot, sequence uint64) ([]byte, error) {
+	runID := snapshot.RunID
+	manifestObject, err := s.Repository.Read(ctx, fmt.Sprintf("runs/%s/history/%020d.json", runID, sequence), s.Now())
+	if err != nil {
+		return nil, err
+	}
+	var handoff state.Transition
+	if err := json.Unmarshal(manifestObject.Data, &handoff); err != nil {
+		return nil, err
+	}
+	var details struct {
+		Bucket      string `json:"bucket"`
+		Key         string `json:"manifest_key"`
+		Fingerprint string `json:"dataset_fingerprint"`
+	}
+	if handoff.Phase != domain.DeliveryPending || json.Unmarshal(handoff.Details, &details) != nil || details.Bucket != s.ArtifactBucket || details.Key != "runs/"+runID+"/manifest.json" {
+		return nil, state.ErrIntegrity
+	}
+	manifestBytes, err := s.Manifests.Read(ctx, details.Key)
+	if err != nil {
+		return nil, err
+	}
+	var manifest pull.Manifest
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		return nil, err
+	}
+	if manifest.Data.RunID != runID || manifest.Data.ConfigRevision != snapshot.ConfigRevision || manifest.Data.DatasetFingerprint != details.Fingerprint || manifest.Data.EventID != snapshot.Event.EventID {
+		return nil, state.ErrIntegrity
+	}
+	body, err := BuildSubmission(manifest, Reference{Bucket: details.Bucket, Key: details.Key})
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errInvalidSubmission, err)
+	}
+	return body, nil
+}
+
+// deliverAttempts sends only still-unreserved attempts in the admitted three-attempt budget.
+func (s *Service) deliverAttempts(ctx context.Context, key string, lease state.Lease, snapshot events.Snapshot, body []byte, start int, allUnknown bool, deadline time.Time) error {
+	runID := snapshot.RunID
+	maxAttempts := snapshot.Config.Processor.MaxAttempts
+	submissionKey := "runs/" + runID + "/delivery/submission.json"
+	for attempt := start; attempt <= maxAttempts; attempt++ {
 		if !s.Now().Add(time.Duration(snapshot.Config.Processor.RequestTimeoutSeconds) * time.Second).Before(deadline.Add(-5 * time.Second)) {
 			return fmt.Errorf("insufficient delivery budget")
 		}
@@ -181,6 +205,124 @@ func (s *Service) Run(ctx context.Context, runID, token string, deadline time.Ti
 		return s.fail(ctx, key, lease, runID, "DELIVERY_OUTCOME_UNKNOWN")
 	}
 	return s.fail(ctx, key, lease, runID, "DELIVERY_ATTEMPTS_EXHAUSTED")
+}
+
+// Resume reclaims an expired delivery and continues from immutable started/finished records.
+func (s *Service) Resume(ctx context.Context, runID, token string, deadline time.Time) error {
+	if s.Repository == nil || s.Manifests == nil || s.Coordinator == nil || s.Client == nil || s.Now == nil || !validRunID(runID) || token == "" || !deadline.After(s.Now()) {
+		return fmt.Errorf("invalid delivery recovery invocation")
+	}
+	object, err := s.Repository.Read(ctx, "runs/"+runID+"/snapshot.json", s.Now())
+	if err != nil {
+		return err
+	}
+	var snapshot events.Snapshot
+	if json.Unmarshal(object.Data, &snapshot) != nil || snapshot.SchemaVersion != 1 || snapshot.RunID != runID || snapshot.ExecutionKey == "" || snapshot.Config.Processor.MaxAttempts < 1 || snapshot.Config.Processor.MaxAttempts > 3 {
+		return state.ErrIntegrity
+	}
+	key := "coordination/" + snapshot.ExecutionKey + ".json"
+	lease, err := s.Coordinator.ClaimExpiredDelivery(ctx, key, runID, token, deadline.Add(time.Minute))
+	if err != nil {
+		return err
+	}
+	if !snapshot.Config.Processor.Enabled {
+		return s.fail(ctx, key, lease, runID, "PROCESSOR_NOT_CONFIGURED")
+	}
+	if err := s.RecoverAccepted(ctx, runID, lease); err == nil {
+		return nil
+	} else if !errors.Is(err, state.ErrNotFound) {
+		return err
+	}
+	submissionObject, err := s.Repository.Read(ctx, "runs/"+runID+"/delivery/submission.json", s.Now())
+	if errors.Is(err, state.ErrNotFound) {
+		current, _, loadErr := s.Coordinator.Load(ctx, key)
+		if loadErr != nil {
+			return loadErr
+		}
+		if current.Phase != domain.Delivering || current.ActiveRunID != runID || current.LastSequence < 2 || current.Generation != lease.Generation || current.OwnerToken != lease.Token {
+			return state.ErrConflict
+		}
+		body, buildErr := s.prepareSubmission(ctx, snapshot, current.LastSequence-1)
+		if buildErr != nil {
+			if errors.Is(buildErr, errInvalidSubmission) {
+				return s.fail(ctx, key, lease, runID, "INVALID_SUBMISSION")
+			}
+			return buildErr
+		}
+		if createErr := s.Repository.Create(ctx, "runs/"+runID+"/delivery/submission.json", body); createErr != nil {
+			return createErr
+		}
+		submissionObject = state.Object{Data: body}
+		err = nil
+	}
+	if err != nil {
+		return err
+	}
+	var submission Submission
+	if json.Unmarshal(submissionObject.Data, &submission) != nil || submission.Data.RunID != runID || submission.ID != "urn:bond-platform:submission:"+runID {
+		return state.ErrIntegrity
+	}
+	next, allUnknown, err := s.nextAttempt(ctx, key, lease, snapshot)
+	if errors.Is(err, errDeliveryFinalized) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return s.deliverAttempts(ctx, key, lease, snapshot, submissionObject.Data, next, allUnknown, deadline)
+}
+
+// nextAttempt accounts for every started request and honors persisted retry delays.
+func (s *Service) nextAttempt(ctx context.Context, key string, lease state.Lease, snapshot events.Snapshot) (int, bool, error) {
+	runID := snapshot.RunID
+	allUnknown := true
+	next := 1
+	for attempt := 1; attempt <= snapshot.Config.Processor.MaxAttempts; attempt++ {
+		started, err := s.Repository.Read(ctx, fmt.Sprintf("runs/%s/delivery/%d/started.json", runID, attempt), s.Now())
+		if errors.Is(err, state.ErrNotFound) {
+			break
+		}
+		if err != nil {
+			return 0, false, err
+		}
+		if len(started.Data) == 0 {
+			return 0, false, state.ErrIntegrity
+		}
+		next = attempt + 1
+		finished, err := s.Repository.Read(ctx, fmt.Sprintf("runs/%s/delivery/%d/finished.json", runID, attempt), s.Now())
+		if errors.Is(err, state.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return 0, false, err
+		}
+		var outcome Outcome
+		if json.Unmarshal(finished.Data, &outcome) != nil || outcome.Code == "" {
+			return 0, false, state.ErrIntegrity
+		}
+		if outcome.Receipt != nil {
+			return 0, false, state.ErrIntegrity
+		}
+		if !outcome.Retry {
+			if err := s.fail(ctx, key, lease, runID, outcome.Code); err != nil {
+				return 0, false, err
+			}
+			return 0, false, errDeliveryFinalized
+		}
+		if outcome.Code != "TRANSPORT_UNKNOWN" && outcome.Code != "INVALID_RESPONSE" && outcome.Code != "INVALID_RECEIPT" && outcome.Status != 500 {
+			allUnknown = false
+		}
+		if outcome.RetryAfterSeconds > 0 {
+			if outcome.FinishedAt.IsZero() {
+				return 0, false, state.ErrIntegrity
+			}
+			remaining := s.Now().Sub(outcome.FinishedAt)
+			if remaining < 0 || outcome.RetryAfterSeconds > int64(remaining/time.Second) {
+				return 0, false, ErrRetryNotReady
+			}
+		}
+	}
+	return next, allUnknown, nil
 }
 
 // validRunID confines every delivery evidence key to its admitted run directory.

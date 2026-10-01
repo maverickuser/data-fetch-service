@@ -68,6 +68,7 @@ type memoryCoordinator struct {
 	claimErr  error
 	commitErr error
 	failPhase domain.State
+	loadError error
 }
 
 func (c *memoryCoordinator) ClaimDispatched(_ context.Context, _, run, queue, token string, _ time.Time) (state.Lease, error) {
@@ -81,8 +82,66 @@ func (c *memoryCoordinator) ClaimDispatched(_ context.Context, _, run, queue, to
 	c.state.Generation++
 	return state.Lease{RunID: run, Generation: c.state.Generation, Token: token}, nil
 }
+func (c *memoryCoordinator) ClaimExpiredDelivery(_ context.Context, _, run, token string, _ time.Time) (state.Lease, error) {
+	if c.state.Phase != domain.Delivering || c.state.ActiveRunID != run {
+		return state.Lease{}, state.ErrConflict
+	}
+	c.state.Generation++
+	c.state.OwnerToken = token
+	return state.Lease{RunID: run, Generation: c.state.Generation, Token: token}, nil
+}
 func (c *memoryCoordinator) Load(context.Context, string) (state.Coordination, string, error) {
+	if c.loadError != nil {
+		return state.Coordination{}, "", c.loadError
+	}
 	return c.state, "etag", nil
+}
+
+func TestDeliveryRecoverySurfacesCoordinationAndStorageFailures(t *testing.T) {
+	for _, scenario := range []string{"run-load", "resume-disabled", "resume-submission-write", "resume-submission-read", "resume-bad-profile", "failure-load"} {
+		t.Run(scenario, func(t *testing.T) {
+			svc, repo, coord, raw := fixture(t, true)
+			svc.Client = clientFunc(func(*http.Request) (*http.Response, error) { t.Fatal("unexpected processor call"); return nil, nil })
+			if scenario == "run-load" {
+				coord.loadError = errors.New("coordination unavailable")
+			}
+			if scenario == "run-load" {
+				if err := svc.Run(context.Background(), "run_1", "worker", fixedTime.Add(time.Minute)); err == nil {
+					t.Fatal("load failure hidden")
+				}
+				return
+			}
+			coord.state.Phase = domain.Delivering
+			coord.state.LastSequence = 5
+			switch scenario {
+			case "resume-disabled":
+				var snapshot events.Snapshot
+				_ = json.Unmarshal(repo.objects["runs/run_1/snapshot.json"], &snapshot)
+				snapshot.Config.Processor.Enabled = false
+				repo.objects["runs/run_1/snapshot.json"], _ = json.Marshal(snapshot)
+			case "resume-submission-write":
+				repo.createError = "runs/run_1/delivery/submission.json"
+			case "resume-submission-read":
+				repo.readError = "runs/run_1/delivery/submission.json"
+			case "resume-bad-profile":
+				var manifest pull.Manifest
+				_ = json.Unmarshal(raw, &manifest)
+				manifest.DataSchema = "unsupported"
+				data, _ := json.Marshal(manifest)
+				svc.Manifests = memoryManifest{data: data}
+			case "failure-load":
+				coord.loadError = errors.New("coordination unavailable")
+			}
+			err := svc.Resume(context.Background(), "run_1", "recovery", fixedTime.Add(time.Minute))
+			if scenario == "resume-disabled" || scenario == "resume-bad-profile" {
+				if err != nil || coord.state.Phase != domain.Failed {
+					t.Fatal(scenario, err, coord.state.Phase)
+				}
+			} else if err == nil {
+				t.Fatal("failure hidden", scenario)
+			}
+		})
+	}
 }
 func (c *memoryCoordinator) Repair(context.Context, string) error { return nil }
 func (c *memoryCoordinator) Commit(_ context.Context, _ string, _ state.Lease, tr state.Transition) error {
@@ -403,6 +462,249 @@ func TestAcceptedRecoveryRejectsIncompleteEvidenceAndWrongOwnership(t *testing.T
 	}
 }
 
+func TestDeliveryResumeKeepsAttemptBudgetAndSubmission(t *testing.T) {
+	for _, scenario := range []string{"lost-response", "lost-finished", "lost-accepted", "terminal-commit", "exhausted-commit"} {
+		t.Run(scenario, func(t *testing.T) {
+			svc, repo, coord, _ := fixture(t, true)
+			calls := 0
+			svc.Client = clientFunc(func(req *http.Request) (*http.Response, error) {
+				calls++
+				if req.GetBody != nil || req.Header.Get("Idempotency-Key") != "run_1" {
+					t.Fatal("unstable replay")
+				}
+				switch scenario {
+				case "lost-response", "exhausted-commit":
+					if scenario == "lost-response" && calls == 2 {
+						return acceptedResponse("run_1"), nil
+					}
+					return nil, errors.New("response lost")
+				case "terminal-commit":
+					return &http.Response{StatusCode: 400, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+				default:
+					return acceptedResponse("run_1"), nil
+				}
+			})
+			switch scenario {
+			case "lost-response":
+				svc.Sleep = func(context.Context, time.Duration) error { return context.Canceled }
+			case "lost-finished":
+				repo.createError = "runs/run_1/delivery/1/finished.json"
+			case "lost-accepted":
+				repo.createError = "runs/run_1/delivery/accepted.json"
+			case "terminal-commit", "exhausted-commit":
+				coord.failPhase = domain.Failed
+			}
+			if err := svc.Run(context.Background(), "run_1", "first", fixedTime.Add(time.Minute)); err == nil {
+				t.Fatal("expected interruption")
+			}
+			firstCalls := calls
+			repo.createError = ""
+			coord.failPhase = domain.State("")
+			svc.Sleep = func(context.Context, time.Duration) error { return nil }
+			if err := svc.Resume(context.Background(), "run_1", "resumer", fixedTime.Add(time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "lost-accepted" || scenario == "terminal-commit" || scenario == "exhausted-commit" {
+				if calls != firstCalls {
+					t.Fatal("recovery made extra HTTP call", calls, firstCalls)
+				}
+			} else if calls != firstCalls+1 || len(repo.objects["runs/run_1/delivery/2/started.json"]) == 0 {
+				t.Fatal("unknown attempt was reused", calls, firstCalls)
+			}
+			if scenario == "terminal-commit" || scenario == "exhausted-commit" {
+				if coord.state.Phase != domain.Failed || coord.commits[len(coord.commits)-1].Acceptance != nil {
+					t.Fatal(coord.commits)
+				}
+			} else if coord.state.Phase != domain.Completed || coord.commits[len(coord.commits)-1].Acceptance == nil {
+				t.Fatal(coord.commits)
+			}
+		})
+	}
+}
+
+func TestDeliveryResumeHonorsPersistedRetryAfter(t *testing.T) {
+	svc, repo, _, _ := fixture(t, true)
+	now := fixedTime
+	svc.Now = func() time.Time { return now }
+	calls := 0
+	svc.Client = clientFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			body := `{"type":"urn:bond-platform:problem:service-unavailable","title":"Unavailable","status":503,"detail":"wait","instance":"urn:uuid:test","code":"SERVICE_UNAVAILABLE","correlationId":"test"}`
+			return &http.Response{StatusCode: 503, Header: http.Header{"Retry-After": []string{"300"}, "Content-Type": []string{"application/problem+json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+		}
+		return acceptedResponse("run_1"), nil
+	})
+	if err := svc.Run(context.Background(), "run_1", "first", now.Add(time.Minute)); err == nil {
+		t.Fatal("expected deferred retry")
+	}
+	if err := svc.Resume(context.Background(), "run_1", "second", now.Add(time.Minute)); !errors.Is(err, ErrRetryNotReady) {
+		t.Fatal(err)
+	}
+	if calls != 1 || len(repo.objects["runs/run_1/delivery/2/started.json"]) != 0 {
+		t.Fatal("retry sent before delay")
+	}
+	now = now.Add(5 * time.Minute)
+	if err := svc.Resume(context.Background(), "run_1", "third", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatal(calls)
+	}
+}
+
+func TestDeliveryResumeRebuildsMissingSubmissionAfterPhaseCommit(t *testing.T) {
+	svc, repo, coord, _ := fixture(t, true)
+	repo.createError = "runs/run_1/delivery/submission.json"
+	calls := 0
+	svc.Client = clientFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return acceptedResponse("run_1"), nil
+	})
+	if err := svc.Run(context.Background(), "run_1", "first", fixedTime.Add(time.Minute)); err == nil || coord.state.Phase != domain.Delivering || calls != 0 {
+		t.Fatal(err, coord.state.Phase, calls)
+	}
+	repo.createError = ""
+	if err := svc.Resume(context.Background(), "run_1", "recovery", fixedTime.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || coord.state.Phase != domain.Completed || len(repo.objects["runs/run_1/delivery/submission.json"]) == 0 {
+		t.Fatal(calls, coord.state.Phase)
+	}
+}
+
+func TestDeliveryResumeRejectsMissingOrCorruptRecoveryEvidence(t *testing.T) {
+	for _, scenario := range []string{"invalid-invocation", "missing-snapshot", "corrupt-snapshot", "not-delivering", "missing-manifest", "bad-handoff", "bad-submission", "corrupt-started", "corrupt-finished"} {
+		t.Run(scenario, func(t *testing.T) {
+			svc, repo, coord, _ := fixture(t, true)
+			coord.state.Phase = domain.Delivering
+			coord.state.LastSequence = 5
+			calls := 0
+			svc.Client = clientFunc(func(*http.Request) (*http.Response, error) { calls++; return acceptedResponse("run_1"), nil })
+			submissionKey := "runs/run_1/delivery/submission.json"
+			switch scenario {
+			case "invalid-invocation":
+				svc.Client = nil
+			case "missing-snapshot":
+				delete(repo.objects, "runs/run_1/snapshot.json")
+			case "corrupt-snapshot":
+				repo.objects["runs/run_1/snapshot.json"] = []byte("{")
+			case "not-delivering":
+				coord.state.Phase = domain.Failed
+			case "missing-manifest":
+				svc.Manifests = memoryManifest{err: state.ErrNotFound}
+			case "bad-handoff":
+				repo.objects["runs/run_1/history/00000000000000000004.json"] = []byte("{}")
+			case "bad-submission":
+				repo.objects[submissionKey] = []byte("{}")
+			case "corrupt-started", "corrupt-finished":
+				body, err := svc.prepareSubmission(context.Background(), events.Snapshot{RunID: "run_1", ConfigRevision: "rev1", Event: events.Normalized{EventID: "event-1"}}, 4)
+				if err != nil {
+					t.Fatal(err)
+				}
+				repo.objects[submissionKey] = body
+				repo.objects["runs/run_1/delivery/1/started.json"] = []byte("{}")
+				if scenario == "corrupt-started" {
+					repo.objects["runs/run_1/delivery/1/started.json"] = nil
+				} else {
+					repo.objects["runs/run_1/delivery/1/finished.json"] = []byte("{")
+				}
+			}
+			if err := svc.Resume(context.Background(), "run_1", "recovery", fixedTime.Add(time.Minute)); err == nil || calls != 0 {
+				t.Fatal(scenario, err, calls)
+			}
+		})
+	}
+}
+
+func TestDeliveryLedgerRejectsAmbiguousEvidence(t *testing.T) {
+	for _, scenario := range []string{"started-read-error", "finished-read-error", "missing-finished", "receipt-without-acceptance", "retry-without-time", "future-finished"} {
+		t.Run(scenario, func(t *testing.T) {
+			svc, repo, coord, _ := fixture(t, true)
+			coord.state.Phase = domain.Delivering
+			started := "runs/run_1/delivery/1/started.json"
+			finished := "runs/run_1/delivery/1/finished.json"
+			repo.objects[started] = []byte("{}")
+			outcome := Outcome{Code: "TRANSPORT_UNKNOWN", Retry: true, FinishedAt: fixedTime}
+			switch scenario {
+			case "started-read-error":
+				repo.readError = started
+			case "finished-read-error":
+				repo.readError = finished
+			case "missing-finished":
+			case "receipt-without-acceptance":
+				outcome.Receipt = &Receipt{RunID: "run_1"}
+			case "retry-without-time":
+				outcome.RetryAfterSeconds = 10
+				outcome.FinishedAt = time.Time{}
+			case "future-finished":
+				outcome.RetryAfterSeconds = 10
+				outcome.FinishedAt = fixedTime.Add(time.Hour)
+			}
+			if scenario != "missing-finished" {
+				data, _ := json.Marshal(outcome)
+				repo.objects[finished] = data
+			}
+			next, _, err := svc.nextAttempt(context.Background(), "coordination/exec1.json", state.Lease{RunID: "run_1"}, events.Snapshot{RunID: "run_1", Config: config.Config{Processor: config.Processor{MaxAttempts: 3}}})
+			if scenario == "missing-finished" {
+				if err != nil || next != 2 {
+					t.Fatal(next, err)
+				}
+			} else if err == nil {
+				t.Fatal("ambiguous ledger accepted", scenario)
+			}
+		})
+	}
+}
+
+func TestDeliveryRunRequiresPinnedHandoffEvidence(t *testing.T) {
+	for _, scenario := range []string{"missing-snapshot", "bad-snapshot-json", "wrong-snapshot-run", "missing-handoff", "bad-handoff-json", "bad-manifest-json", "mismatched-manifest", "invalid-profile", "bad-attempt-budget"} {
+		t.Run(scenario, func(t *testing.T) {
+			svc, repo, coord, raw := fixture(t, true)
+			calls := 0
+			svc.Client = clientFunc(func(*http.Request) (*http.Response, error) { calls++; return acceptedResponse("run_1"), nil })
+			switch scenario {
+			case "missing-snapshot":
+				delete(repo.objects, "runs/run_1/snapshot.json")
+			case "bad-snapshot-json":
+				repo.objects["runs/run_1/snapshot.json"] = []byte("{")
+			case "wrong-snapshot-run":
+				var snapshot events.Snapshot
+				_ = json.Unmarshal(repo.objects["runs/run_1/snapshot.json"], &snapshot)
+				snapshot.RunID = "other"
+				repo.objects["runs/run_1/snapshot.json"], _ = json.Marshal(snapshot)
+			case "missing-handoff":
+				delete(repo.objects, "runs/run_1/history/00000000000000000004.json")
+			case "bad-handoff-json":
+				repo.objects["runs/run_1/history/00000000000000000004.json"] = []byte("{")
+			case "bad-manifest-json":
+				svc.Manifests = memoryManifest{data: []byte("{")}
+			case "mismatched-manifest":
+				var manifest pull.Manifest
+				_ = json.Unmarshal(raw, &manifest)
+				manifest.Data.ConfigRevision = "other"
+				data, _ := json.Marshal(manifest)
+				svc.Manifests = memoryManifest{data: data}
+			case "invalid-profile":
+				var manifest pull.Manifest
+				_ = json.Unmarshal(raw, &manifest)
+				manifest.DataSchema = "unsupported"
+				data, _ := json.Marshal(manifest)
+				svc.Manifests = memoryManifest{data: data}
+			case "bad-attempt-budget":
+				var snapshot events.Snapshot
+				_ = json.Unmarshal(repo.objects["runs/run_1/snapshot.json"], &snapshot)
+				snapshot.Config.Processor.MaxAttempts = 0
+				repo.objects["runs/run_1/snapshot.json"], _ = json.Marshal(snapshot)
+			}
+			err := svc.Run(context.Background(), "run_1", "worker", fixedTime.Add(time.Minute))
+			if calls != 0 || scenario != "invalid-profile" && err == nil || scenario == "invalid-profile" && (err != nil || coord.state.Phase != domain.Failed) {
+				t.Fatal(scenario, err, calls, coord.state.Phase)
+			}
+		})
+	}
+}
+
 func TestProcessorResponseClassification(t *testing.T) {
 	svc, _, _, _ := fixture(t, true)
 	for _, scenario := range []string{"transport", "nil", "no-body", "oversize", "bad202", "rate-limit", "service-error", "redirect", "close-error", "accepted"} {
@@ -453,6 +755,17 @@ func TestProcessorResponseClassification(t *testing.T) {
 	}
 	if out := svc.send(context.Background(), "https://processor.example/wrong", nil, "run_1", time.Second); out.Code != "INVALID_PROCESSOR_URL" {
 		t.Fatal(out)
+	}
+}
+
+func TestProcessorMalformedAcceptedBodyIsUnknownOutcome(t *testing.T) {
+	svc, _, _, _ := fixture(t, true)
+	svc.Client = clientFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 202, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader("{"))}, nil
+	})
+	outcome := svc.send(context.Background(), "https://processor.example/v1/event-ingestions", []byte("{}"), "run_1", time.Second)
+	if outcome.Code != "INVALID_RECEIPT" || !outcome.Retry || outcome.Receipt != nil {
+		t.Fatal(outcome)
 	}
 }
 

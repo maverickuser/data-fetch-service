@@ -208,7 +208,7 @@ func (s *Service) commitPhase(ctx context.Context, key string, lease state.Lease
 	return s.Coordinator.Commit(ctx, key, lease, state.Transition{RunID: lease.RunID, Sequence: current.LastSequence + 1, Phase: phase, At: at.UTC(), Details: details})
 }
 
-// JobOutcome is immutable evidence for a completed, failed, or canceled group job.
+// JobOutcome is immutable evidence for a completed, failed, canceled, or budget-interrupted group job.
 type JobOutcome struct {
 	JobID     string              `json:"job_id"`
 	Status    string              `json:"status"`
@@ -284,7 +284,11 @@ func (s *Service) group(groupCtx, recordCtx context.Context, snapshot events.Sna
 		if seen && item.err != nil && errors.Is(item.err, context.Canceled) {
 			outcome.Status = "canceled"
 		}
-		if seen && item.err != nil && !errors.Is(item.err, context.Canceled) {
+		if seen && item.err != nil && errors.Is(groupCtx.Err(), context.DeadlineExceeded) && errors.Is(item.err, context.DeadlineExceeded) {
+			outcome.Status = "interrupted"
+			outcome.ErrorCode = "GROUP_BUDGET_EXCEEDED"
+			groupErr = errors.Join(groupErr, item.err)
+		} else if seen && item.err != nil && !errors.Is(item.err, context.Canceled) {
 			outcome.Status = "failed"
 			outcome.ErrorCode = "ACQUISITION_FAILED"
 			var failure *acquisition.Failure

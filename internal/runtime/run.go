@@ -24,6 +24,7 @@ import (
 	"github.com/maverickuser/data-fetch-service/internal/events"
 	"github.com/maverickuser/data-fetch-service/internal/pull"
 	"github.com/maverickuser/data-fetch-service/internal/queue"
+	"github.com/maverickuser/data-fetch-service/internal/recovery"
 	"github.com/maverickuser/data-fetch-service/internal/state"
 	"github.com/maverickuser/data-fetch-service/internal/storage"
 )
@@ -43,7 +44,7 @@ func Run(kind string) error {
 
 // Start validates all local/deployment inputs before constructing network clients.
 func Start(ctx context.Context, kind string, d Dependencies) error {
-	if kind != "api" && kind != "admission" && kind != "pull" && kind != "delivery" {
+	if kind != "api" && kind != "admission" && kind != "pull" && kind != "delivery" && kind != "reconciler" {
 		return fmt.Errorf("unknown Lambda kind")
 	}
 	base, err := d.ReadFile("config/events.yaml")
@@ -103,14 +104,18 @@ func Start(ctx context.Context, kind string, d Dependencies) error {
 			return pinnedPullFetcher(fetcher, artifactClient, artifactBucket, defaults)
 		}}
 		d.Start((&pull.Ingress{Runner: worker, Store: store, NewToken: newID}).Handle)
-	} else if kind == "delivery" {
+	} else if kind == "delivery" || kind == "reconciler" {
 		artifactBucket := d.Env("ARTIFACT_BUCKET")
 		if artifactBucket == "" {
-			return fmt.Errorf("artifact bucket required for delivery")
+			return fmt.Errorf("artifact bucket required for delivery or reconciler")
 		}
-		processorClient := &http.Client{Transport: &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 10 * time.Second}).DialContext, TLSHandshakeTimeout: 10 * time.Second}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-		worker := &delivery.Service{Repository: store, Manifests: &storage.Reader{Client: s3.NewFromConfig(awsCfg), Bucket: artifactBucket, MaxBytes: 1 << 20}, Coordinator: coordinator, Client: processorClient, ArtifactBucket: artifactBucket, Now: time.Now}
-		d.Start((&delivery.Ingress{Runner: worker, Store: store, NewToken: newID}).Handle)
+		worker := deliveryWorker(store, coordinator, s3.NewFromConfig(awsCfg), artifactBucket)
+		if kind == "delivery" {
+			d.Start((&delivery.Ingress{Runner: worker, Store: store, NewToken: newID}).Handle)
+		} else {
+			reconciler := &recovery.Service{Repository: store, Coordinator: coordinator, Publisher: publisher, Delivery: worker, Now: time.Now, NewID: newID, PageLimit: 100}
+			d.Start((&recovery.Handler{Service: reconciler}).Handle)
+		}
 	} else if kind == "admission" {
 		handler := &admission.Ingress{Service: service, Store: store, Mappings: mappings}
 		d.Start(handler.Handle)
@@ -120,6 +125,12 @@ func Start(ctx context.Context, kind string, d Dependencies) error {
 		d.Start(adapter.Handle)
 	}
 	return nil
+}
+
+// deliveryWorker uses a private HTTPS client and bounded manifest reader for both delivery paths.
+func deliveryWorker(store *state.Store, coordinator *state.Coordinator, client *s3.Client, bucket string) *delivery.Service {
+	processorClient := &http.Client{Transport: &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 10 * time.Second}).DialContext, TLSHandshakeTimeout: 10 * time.Second}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	return &delivery.Service{Repository: store, Manifests: &storage.Reader{Client: client, Bucket: bucket, MaxBytes: 1 << 20}, Coordinator: coordinator, Client: processorClient, ArtifactBucket: bucket, Now: time.Now}
 }
 
 // pinnedPullFetcher uses admitted source, disk, and S3 byte limits for a queued run.

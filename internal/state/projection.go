@@ -13,12 +13,18 @@ import (
 
 // RunView is derived only from immutable history, never from an uncommitted reservation.
 type RunView struct {
-	RunID     string          `json:"run_id"`
-	Phase     domain.State    `json:"phase"`
-	Sequence  uint64          `json:"sequence"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
-	Snapshot  json.RawMessage `json:"snapshot,omitempty"`
+	RunID               string          `json:"run_id"`
+	Phase               domain.State    `json:"phase"`
+	Sequence            uint64          `json:"sequence"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at"`
+	Snapshot            json.RawMessage `json:"snapshot,omitempty"`
+	ParentRunID         string          `json:"parent_run_id,omitempty"`
+	RetryRootRunID      string          `json:"retry_root_run_id,omitempty"`
+	ExecutionRetryIndex int             `json:"execution_retry_index"`
+	ChildRunID          string          `json:"child_run_id,omitempty"`
+	LatestRunID         string          `json:"latest_run_id"`
+	LatestPhase         domain.State    `json:"latest_phase"`
 }
 
 // HistoryPage is a bounded immutable history page with an opaque continuation token.
@@ -60,6 +66,65 @@ func (c *Coordinator) History(ctx context.Context, runID, token string, limit in
 
 // ReadRun projects at most 100 run-level transitions; job attempts are separate records.
 func (c *Coordinator) ReadRun(ctx context.Context, runID string) (RunView, error) {
+	view, err := c.readRunBase(ctx, runID)
+	if err != nil {
+		return RunView{}, err
+	}
+	latest := view
+	seen := map[string]bool{runID: true}
+	for i := view.ExecutionRetryIndex; i < 3; i++ {
+		object, err := c.store.Read(ctx, "runs/"+latest.RunID+"/automatic-retry.json", c.now())
+		if err == ErrNotFound {
+			break
+		}
+		if err != nil {
+			return RunView{}, err
+		}
+		var link AutomaticRetryLink
+		if json.Unmarshal(object.Data, &link) != nil || link.ParentRunID != latest.RunID || !safeRunID(link.ChildRunID) || seen[link.ChildRunID] || link.Index != latest.ExecutionRetryIndex+1 {
+			return RunView{}, ErrIntegrity
+		}
+		if view.RetryRootRunID != "" && link.RootRunID != view.RetryRootRunID || view.RetryRootRunID == "" && link.RootRunID != view.RunID {
+			return RunView{}, ErrIntegrity
+		}
+		child, err := c.readRunBase(ctx, link.ChildRunID)
+		if err != nil {
+			if err == ErrNotFound {
+				coordination, _, loadErr := c.Load(ctx, "coordination/"+snapshotExecutionKey(latest.Snapshot)+".json")
+				if loadErr == nil && coordination.Retry != nil && coordination.Retry.ParentRunID == link.ParentRunID && coordination.Retry.ChildRunID == link.ChildRunID {
+					if latest.RunID == view.RunID {
+						view.ChildRunID = link.ChildRunID
+					}
+					break
+				}
+			}
+			return RunView{}, err
+		}
+		if child.ParentRunID != latest.RunID || child.RetryRootRunID != link.RootRunID || child.ExecutionRetryIndex != link.Index {
+			return RunView{}, ErrIntegrity
+		}
+		seen[child.RunID] = true
+		if latest.RunID == view.RunID {
+			view.ChildRunID = child.RunID
+		}
+		latest = child
+	}
+	view.LatestRunID = latest.RunID
+	view.LatestPhase = latest.Phase
+	return view, nil
+}
+
+// snapshotExecutionKey extracts the admitted coordination identity for a reserved retry.
+func snapshotExecutionKey(raw json.RawMessage) string {
+	var snapshot events.Snapshot
+	if json.Unmarshal(raw, &snapshot) != nil {
+		return ""
+	}
+	return snapshot.ExecutionKey
+}
+
+// readRunBase validates one run's immutable snapshot and transition history.
+func (c *Coordinator) readRunBase(ctx context.Context, runID string) (RunView, error) {
 	if !safeRunID(runID) {
 		return RunView{}, fmt.Errorf("invalid run ID")
 	}
@@ -84,7 +149,7 @@ func (c *Coordinator) ReadRun(ctx context.Context, runID string) (RunView, error
 	if len(history.Transitions) == 0 {
 		return RunView{}, ErrNotFound
 	}
-	view := RunView{RunID: runID, Snapshot: object.Data}
+	view := RunView{RunID: runID, Snapshot: object.Data, ParentRunID: snapshot.ParentRunID, RetryRootRunID: snapshot.RetryRootRunID, ExecutionRetryIndex: snapshot.ExecutionRetryIndex}
 	for index, t := range history.Transitions {
 		if t.Sequence != uint64(index+1) || t.At.IsZero() || (index == 0 && t.Phase != domain.Queued) || (index > 0 && !allowedTransition(view.Phase, t.Phase)) {
 			return RunView{}, ErrIntegrity

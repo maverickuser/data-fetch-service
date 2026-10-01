@@ -8,6 +8,7 @@
 - [Admission runtime and API](runtime.md): implemented entry points, deployment inputs and API limits.
 - [Pull PR description](plans/pull-pr.md): complete-event orchestration, manifest and fingerprint behavior.
 - [Delivery PR description](plans/delivery-pr.md): processor admission, durable attempts, and accepted-baseline recovery.
+- [Recovery PR description](plans/recovery-pr.md): reconciler, linked Pull retries, and delivery resume.
 - [Original fetch specification](specs/data-puller-service-spec.md): historical; LLD supersedes conflicts.
 - [Processor LLD](specs/structured-file-processing-lld.md) and [processor specification](specs/structured-file-processing-spec.md): external references. Processor LLD is preserved unchanged at user request; authoritative admission details are in OpenAPI.
 

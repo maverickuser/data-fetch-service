@@ -26,7 +26,7 @@ func (c *Coordinator) PublishPending(ctx context.Context, key string, publisher 
 	if err != nil {
 		return err
 	}
-	if current.Admission != nil || current.Pending != nil {
+	if current.Admission != nil || current.Pending != nil || current.Retry != nil {
 		return ErrConflict
 	}
 	d := current.Dispatch
@@ -52,7 +52,7 @@ func (c *Coordinator) ClaimDispatched(ctx context.Context, key, runID, queue, to
 	if err != nil {
 		return Lease{}, err
 	}
-	if current.Admission != nil || current.Pending != nil || current.ActiveRunID != runID || !dispatchMatches(queue, current.Phase) || current.Dispatch == nil || current.Dispatch.RunID != runID || current.Dispatch.Queue != queue {
+	if current.Admission != nil || current.Pending != nil || current.Retry != nil || current.ActiveRunID != runID || !dispatchMatches(queue, current.Phase) || current.Dispatch == nil || current.Dispatch.RunID != runID || current.Dispatch.Queue != queue {
 		return Lease{}, ErrConflict
 	}
 	if current.OwnerToken != "" {
@@ -74,4 +74,62 @@ func (c *Coordinator) ClaimDispatched(ctx context.Context, key, runID, queue, to
 // dispatchMatches prevents stale pull messages from claiming a delivery phase.
 func dispatchMatches(queue string, phase domain.State) bool {
 	return (queue == "pull" && phase == domain.Queued) || (queue == "delivery" && phase == domain.DeliveryPending)
+}
+
+// ClaimExpiredDelivery fences an abandoned delivery without resetting its HTTP attempt ledger.
+func (c *Coordinator) ClaimExpiredDelivery(ctx context.Context, key, runID, token string, deadline time.Time) (Lease, error) {
+	if token == "" || !deadline.After(c.now()) {
+		return Lease{}, fmt.Errorf("token and future deadline required")
+	}
+	current, etag, err := c.Load(ctx, key)
+	if err != nil {
+		return Lease{}, err
+	}
+	if current.ActiveRunID != runID || current.Phase != domain.Delivering || current.OwnerDeadline.IsZero() || c.now().Before(current.OwnerDeadline) || current.Pending != nil || current.Admission != nil || current.Retry != nil {
+		return Lease{}, ErrConflict
+	}
+	current.Generation++
+	current.OwnerToken = token
+	current.OwnerDeadline = deadline
+	if err := c.save(ctx, key, current, etag); err != nil {
+		return Lease{}, err
+	}
+	return Lease{RunID: runID, Generation: current.Generation, Token: token}, nil
+}
+
+// RequeueExpiredDispatch releases only a pre-work claim whose phase never advanced.
+func (c *Coordinator) RequeueExpiredDispatch(ctx context.Context, key string) error {
+	current, etag, err := c.Load(ctx, key)
+	if err != nil {
+		return err
+	}
+	if current.Pending != nil || current.Admission != nil || current.Retry != nil || current.Dispatch == nil || current.ActiveRunID != current.Dispatch.RunID || !dispatchMatches(current.Dispatch.Queue, current.Phase) || current.OwnerDeadline.IsZero() || c.now().Before(current.OwnerDeadline) {
+		return ErrConflict
+	}
+	current.Generation++
+	current.OwnerToken = ""
+	current.OwnerDeadline = time.Time{}
+	current.Dispatch.State = "pending"
+	return c.save(ctx, key, current, etag)
+}
+
+// ClaimExpiredDownloadsCompleted fences an abandoned post-download decision without rerunning sources.
+func (c *Coordinator) ClaimExpiredDownloadsCompleted(ctx context.Context, key, token string, deadline time.Time) (Lease, error) {
+	if token == "" || !deadline.After(c.now()) {
+		return Lease{}, fmt.Errorf("token and future deadline required")
+	}
+	current, etag, err := c.Load(ctx, key)
+	if err != nil {
+		return Lease{}, err
+	}
+	if current.Phase != domain.DownloadsCompleted || !safeRunID(current.ActiveRunID) || current.OwnerDeadline.IsZero() || c.now().Before(current.OwnerDeadline) || current.Pending != nil || current.Admission != nil || current.Retry != nil {
+		return Lease{}, ErrConflict
+	}
+	current.Generation++
+	current.OwnerToken = token
+	current.OwnerDeadline = deadline
+	if err := c.save(ctx, key, current, etag); err != nil {
+		return Lease{}, err
+	}
+	return Lease{RunID: current.ActiveRunID, Generation: current.Generation, Token: token}, nil
 }

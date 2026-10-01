@@ -12,17 +12,20 @@ import (
 
 // Snapshot is serialized before dispatch; retries consume these bytes without re-resolution.
 type Snapshot struct {
-	SchemaVersion  int                  `json:"schema_version"`
-	RunID          string               `json:"run_id"`
-	RequestKey     string               `json:"request_key"`
-	ExecutionKey   string               `json:"execution_key"`
-	PayloadHash    string               `json:"payload_hash"`
-	ConfigRevision string               `json:"config_revision"`
-	Event          Normalized           `json:"event"`
-	Inputs         map[string]string    `json:"inputs"`
-	Jobs           []config.ResolvedJob `json:"jobs"`
-	Config         config.Config        `json:"config"`
-	Force          bool                 `json:"force"`
+	SchemaVersion       int                  `json:"schema_version"`
+	RunID               string               `json:"run_id"`
+	RequestKey          string               `json:"request_key"`
+	ExecutionKey        string               `json:"execution_key"`
+	PayloadHash         string               `json:"payload_hash"`
+	ConfigRevision      string               `json:"config_revision"`
+	Event               Normalized           `json:"event"`
+	Inputs              map[string]string    `json:"inputs"`
+	Jobs                []config.ResolvedJob `json:"jobs"`
+	Config              config.Config        `json:"config"`
+	Force               bool                 `json:"force"`
+	ParentRunID         string               `json:"parent_run_id,omitempty"`
+	RetryRootRunID      string               `json:"retry_root_run_id,omitempty"`
+	ExecutionRetryIndex int                  `json:"execution_retry_index,omitempty"`
 }
 
 // BuildSnapshot returns detached immutable JSON with resolved jobs and conflict identities.

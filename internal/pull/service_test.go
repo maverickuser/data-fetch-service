@@ -10,6 +10,7 @@ import (
 	"fmt"
 	lambdaevents "github.com/aws/aws-lambda-go/events"
 	"io"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -86,6 +87,19 @@ type publishFake struct {
 }
 
 type claimConflict struct{ Coordinator }
+
+type sourceClientFunc func(*http.Request) (*http.Response, error)
+
+func (f sourceClientFunc) Do(r *http.Request) (*http.Response, error) { return f(r) }
+
+type failTerminalCommit struct{ Coordinator }
+
+func (f failTerminalCommit) Commit(ctx context.Context, key string, lease state.Lease, tr state.Transition) error {
+	if tr.Phase == domain.Failed {
+		return errors.New("interrupted before terminal reservation")
+	}
+	return f.Coordinator.Commit(ctx, key, lease, tr)
+}
 
 func (claimConflict) ClaimDispatched(context.Context, string, string, string, string, time.Time) (state.Lease, error) {
 	return state.Lease{}, state.ErrConflict
@@ -394,6 +408,62 @@ func TestPullCanceledExecutionRetainsClaim(t *testing.T) {
 	current, _, err := service.Coordinator.Load(context.Background(), "coordination/"+snapshot.ExecutionKey+".json")
 	if err != nil || current.Phase != domain.Pulling {
 		t.Fatal(current, err)
+	}
+}
+
+func TestPullOutcomesControlExpiredExecutionRecovery(t *testing.T) {
+	for _, scenario := range []string{"source-404", "group-budget"} {
+		t.Run(scenario, func(t *testing.T) {
+			service, objects, _, _, snapshot, _ := serviceFixture(t, "daily-bhavcopy", false, "")
+			store := service.Repository.(*state.Store)
+			if scenario == "source-404" {
+				service.Fetcher = &acquisition.Fetcher{Client: sourceClientFunc(func(*http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: 404, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}}, nil
+				}), Storage: service.ManifestStorage, Recorder: acquisition.StateRecorder{Store: store}, Budget: acquisition.NewBudget(snapshot.Config.Defaults.MaxTempBytes), Limits: acquisition.ConfiguredLimits(snapshot.Config.Defaults), TempRoot: t.TempDir(), Now: service.Now}
+				service.Coordinator = failTerminalCommit{Coordinator: service.Coordinator}
+			} else {
+				service.Fetcher = fetchFunc(func(ctx context.Context, _ string, _ config.ResolvedJob) (acquisition.Result, error) {
+					<-ctx.Done()
+					return acquisition.Result{}, ctx.Err()
+				})
+			}
+			deadline := time.Now().Add(15 * time.Minute)
+			if scenario == "group-budget" {
+				deadline = time.Now().Add(60*time.Second + 100*time.Millisecond)
+			}
+			if err := service.Run(context.Background(), "run", "worker", deadline); err == nil {
+				t.Fatal("expected interrupted run")
+			}
+			resultKey := "runs/run/pulls/" + snapshot.Jobs[0].ID + "/result.json"
+			var outcome JobOutcome
+			if err := json.Unmarshal(objects.items[resultKey].Data, &outcome); err != nil {
+				t.Fatal(err)
+			}
+			wantStatus, wantCode := "failed", "SOURCE_HTTP"
+			if scenario == "group-budget" {
+				wantStatus, wantCode = "interrupted", "GROUP_BUDGET_EXCEEDED"
+			}
+			if outcome.Status != wantStatus || outcome.ErrorCode != wantCode {
+				t.Fatal(outcome)
+			}
+			coordinator := state.NewCoordinator(store, func() time.Time { return deadline.Add(2 * time.Minute) })
+			key := "coordination/" + snapshot.ExecutionKey + ".json"
+			child, err := coordinator.ReservePullRetry(context.Background(), key, "child")
+			if err != nil {
+				t.Fatal(err)
+			}
+			current, _, err := coordinator.Load(context.Background(), key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "source-404" {
+				if child != "" || current.Phase != domain.Failed || current.ActiveRunID != "" {
+					t.Fatal(child, current)
+				}
+			} else if child != "child" || current.Phase != domain.Queued || current.ActiveRunID != "child" {
+				t.Fatal(child, current)
+			}
+		})
 	}
 }
 

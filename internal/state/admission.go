@@ -124,7 +124,7 @@ func (c *Coordinator) Admit(ctx context.Context, candidate RequestIntent) (Resol
 	} else if err != nil {
 		return Resolution{}, err
 	}
-	if current.Admission != nil || current.Pending != nil {
+	if current.Admission != nil || current.Pending != nil || current.Retry != nil {
 		if err := c.Repair(ctx, key); err != nil {
 			return Resolution{}, err
 		}
