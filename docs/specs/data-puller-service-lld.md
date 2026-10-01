@@ -864,7 +864,7 @@ Business failures that are durably recorded are acknowledged to SQS. Return an S
 
 ### Manual recovery modes
 
-- Full rerun: new run, all jobs execute using the original snapshot and resolved inputs; optional force. The operator starts a fresh event to use newly deployed job configuration.
+- Full rerun: new run, all jobs execute using the original snapshot and resolved inputs; omitted `force` preserves the original choice, while an explicit boolean overrides only that choice. The operator starts a fresh event to use newly deployed job configuration.
 - Delivery retry: new linked run, no source requests, new immutable manifest referring to the original complete files, and a fresh three-attempt delivery budget. Use only for delivery-stage failures. Reacquire the same execution key and reject stale retry if a newer different dataset has already been accepted; use a full rerun instead.
 - If the processor URL was a placeholder, delivery retry may explicitly select current processor configuration. Record old/new revision and destination in the retry snapshot.
 

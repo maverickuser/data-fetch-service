@@ -30,6 +30,13 @@ type apiFake struct {
 	records               map[string]state.Object
 	prefix, token         string
 	limit                 int32
+	rerunParent, rerunKey string
+	rerunForce            *bool
+}
+
+func (f *apiFake) FullRerun(_ context.Context, parent, key string, force *bool) (admission.Result, error) {
+	f.rerunParent, f.rerunKey, f.rerunForce = parent, key, force
+	return f.result, f.err
 }
 
 func (f *apiFake) Manual(_ context.Context, event, key string, inputs map[string]any, force bool) (admission.Result, error) {
@@ -65,7 +72,36 @@ func handlerFixture(t *testing.T) (*Handler, *apiFake) {
 		t.Fatal(err)
 	}
 	f := &apiFake{result: admission.Result{RunID: "run", Status: domain.Queued, StatusURL: "/v1/runs/run"}, view: state.RunView{RunID: "run", Phase: domain.Queued}, coord: state.Coordination{ActiveRunID: "run"}, records: map[string]state.Object{}}
-	return &Handler{Service: f, Coordinator: f, Store: f, Config: cfg, Now: func() time.Time { return time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC) }}, f
+	return &Handler{Service: f, Recovery: f, Coordinator: f, Store: f, Config: cfg, Now: func() time.Time { return time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC) }}, f
+}
+
+func TestFullRerunHTTPContract(t *testing.T) {
+	h, f := handlerFixture(t)
+	w := call(h, "POST", "/v1/runs/parent/reruns", `{"force":true}`)
+	if w.Code != 202 || f.rerunParent != "parent" || f.rerunKey != "request-key" || f.rerunForce == nil || !*f.rerunForce || w.Header().Get("Location") != "/v1/runs/run" {
+		t.Fatal(w.Code, w.Body.String(), f)
+	}
+	for _, body := range []string{`{"force":"yes"}`, `{"url":"https://evil"}`, `{} {`, `{`} {
+		if w := call(h, "POST", "/v1/runs/parent/reruns", body); w.Code != 400 {
+			t.Fatal(body, w.Code)
+		}
+	}
+	f.err = state.ErrConflict
+	if w := call(h, "POST", "/v1/runs/parent/reruns", `{}`); w.Code != 409 {
+		t.Fatal(w.Code)
+	}
+	f.err = nil
+	f.result.CompletedReplay = true
+	if w := call(h, "POST", "/v1/runs/parent/reruns", ""); w.Code != 200 || f.rerunForce != nil {
+		t.Fatal(w.Code, f.rerunForce)
+	}
+	if w := call(h, "POST", "/v1/runs/parent/reruns", `{"force":true,"padding":"`+strings.Repeat("x", 65536)+`"}`); w.Code != 413 {
+		t.Fatal(w.Code)
+	}
+	h.Recovery = nil
+	if w := call(h, "POST", "/v1/runs/parent/reruns", `{}`); w.Code != 400 {
+		t.Fatal(w.Code)
+	}
 }
 
 func call(h *Handler, method, path, body string) *httptest.ResponseRecorder {

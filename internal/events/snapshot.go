@@ -28,6 +28,39 @@ type Snapshot struct {
 	ExecutionRetryIndex int                  `json:"execution_retry_index,omitempty"`
 }
 
+// CloneForFullRerun preserves resolved jobs and dates while assigning a fresh manual request identity.
+func CloneForFullRerun(parent Snapshot, runID, requestID string, force bool) ([]byte, error) {
+	if parent.SchemaVersion != 1 || parent.RunID == "" || parent.ExecutionKey == "" || len(parent.Jobs) == 0 || runID == "" || runID == parent.RunID || requestID == "" {
+		return nil, fmt.Errorf("invalid full rerun snapshot")
+	}
+	child := parent
+	child.RunID = runID
+	child.ParentRunID = parent.RunID
+	child.RetryRootRunID = ""
+	child.ExecutionRetryIndex = 0
+	child.Force = force
+	child.Event.Source = "urn:bond-platform:manual-rerun:" + parent.RunID
+	child.Event.EventID = requestID
+	child.Event.Force = force
+	child.Event.Original = nil
+	child.Event.OccurredAt = parent.Event.OccurredAt.UTC()
+	requestKey, err := domain.RequestKey(child.Event.Source, requestID)
+	if err != nil {
+		return nil, err
+	}
+	child.RequestKey = requestKey
+	canonical := child.Event
+	canonical.Inputs = make(map[string]any, len(child.Inputs))
+	for name, value := range child.Inputs {
+		canonical.Inputs[name] = value
+	}
+	child.PayloadHash, err = digest(canonical)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(child)
+}
+
 // BuildSnapshot returns detached immutable JSON with resolved jobs and conflict identities.
 func BuildSnapshot(cfg config.Config, event Normalized, runID string) ([]byte, error) {
 	if runID == "" {

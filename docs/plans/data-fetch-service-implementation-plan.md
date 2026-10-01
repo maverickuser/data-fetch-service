@@ -191,20 +191,28 @@ Branch: `stack/08-recovery`; base: PR 07. LLD: sections 8, 13.
 
 Exit evidence: exhaustive deterministic fault injection across retry commit/dispatch steps; one child per failed execution, four executions maximum, no overlap, no budget reset on SQS redelivery, and no retry chain for BSE 404 or validation failures. Persisted delivery intent must resume delivery rather than redownload.
 
-## PR 09 — Manual recovery and complete mocked API contracts
+## PR 09a — Full rerun from the pinned snapshot
 
-Branch: `stack/09-recovery-api`; base: PR 08. LLD: sections 13–14, 16.
+Branch: `stack/09-full-rerun`; base: PR 08. LLD: sections 13–14, 16.
 
-- Add full-rerun and delivery-retry endpoints with idempotency, parent linkage, active-run protection, artifact-expiry checks, and stale-dataset protection.
+- Add the full-rerun endpoint with idempotency, parent linkage, active-run protection, and preserved original resolved jobs/date/configuration. An optional force choice is the only allowed dataset override.
+
+Exit evidence: the real HTTP adapter, admission service, and conditional state coordinator create one linked child from a terminal parent, reject another active request, and preserve the pinned BSE/NSDL inputs without re-resolving against current configuration.
+
+## PR 09b — Delivery retry and complete mocked API contracts
+
+Branch: `stack/09-delivery-retry-api`; base: PR 09a. LLD: sections 13–14, 16.
+
+- Add the delivery-retry endpoint with idempotency, parent linkage, active-run protection, artifact-expiry checks, and stale-dataset protection.
 - Support explicit selection of current processor configuration for delivery retry and record the change in its snapshot.
 - Finish structured logs, correlation fields, metrics, and error projections across all handlers; telemetry should also be added with earlier components as they land.
 - Complete the mocked API/component suite covering the entire API-to-worker-to-processor flow, including reads during interrupted commits and automatic retries.
 
-Exit evidence: every route has success and meaningful failure integration coverage; delivery retry reuses complete retained files; full rerun preserves original resolved inputs; expired files return 410; newer accepted data blocks stale delivery recovery.
+Exit evidence: every route has success and meaningful failure integration coverage; delivery retry reuses complete retained files; expired files return 410; newer accepted data blocks stale delivery recovery.
 
 ## PR 10 — Terraform runtime infrastructure
 
-Branch: `stack/10-infrastructure`; base: PR 09. LLD: section 15.
+Branch: `stack/10-infrastructure`; base: PR 09b. LLD: section 15.
 
 - Provision artifact/state buckets with the agreed lifecycles, three queues/DLQs, five VPC-attached Lambdas, API Gateway, logs/metrics, scoped IAM, and mappings.
 - Provision or validate the selected VPC network inputs: private subnets in at least two Availability Zones, route tables, S3 gateway endpoint, SQS and CloudWatch Logs interface endpoints, endpoint policies/security groups, private DNS, NAT egress for public sources, and private connectivity to the processor in the same VPC. Assert that no Lambda subnet is public.

@@ -22,10 +22,16 @@ import (
 // Handler shares durable admission with SQS; read routes never perform recovery.
 type Handler struct {
 	Service     ManualAdmission
+	Recovery    FullRerunAdmission
 	Store       Records
 	Coordinator Reader
 	Config      config.Config
 	Now         func() time.Time
+}
+
+// FullRerunAdmission creates a linked run from one terminal admitted snapshot.
+type FullRerunAdmission interface {
+	FullRerun(context.Context, string, string, *bool) (admission.Result, error)
 }
 
 // ManualAdmission is the application boundary used by the HTTP adapter.
@@ -47,10 +53,11 @@ type Records interface {
 	Read(context.Context, string, time.Time) (state.Object, error)
 }
 
-// Routes binds the initial REST surface; manual recovery routes arrive in PR09.
+// Routes binds manual admission, full rerun, and bounded read resources.
 func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/events/{event_type}/runs", h.manual)
+	mux.HandleFunc("POST /v1/runs/{run_id}/reruns", h.fullRerun)
 	mux.HandleFunc("GET /v1/events/{event_type}", h.event)
 	mux.HandleFunc("GET /v1/events/{event_type}/active", h.active)
 	mux.HandleFunc("GET /v1/events/{event_type}/runs", h.listRuns)
@@ -70,6 +77,49 @@ func (h *Handler) Routes() http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// fullRerun accepts only an optional force choice and an idempotency key for a terminal run.
+func (h *Handler) fullRerun(w http.ResponseWriter, r *http.Request) {
+	if h.Recovery == nil {
+		h.fail(w, admission.ErrInvalid)
+		return
+	}
+	var body struct {
+		Force *bool `json:"force"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil && err != io.EOF {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			h.write(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "BODY_TOO_LARGE"})
+			return
+		}
+		h.fail(w, admission.ErrInvalid)
+		return
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		h.fail(w, admission.ErrInvalid)
+		return
+	}
+	key := r.Header.Get("Idempotency-Key")
+	if len(key) > 256 {
+		h.fail(w, admission.ErrInvalid)
+		return
+	}
+	result, err := h.Recovery.FullRerun(r.Context(), r.PathValue("run_id"), key, body.Force)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	status := http.StatusAccepted
+	if result.CompletedReplay {
+		status = http.StatusOK
+	}
+	w.Header().Set("Location", result.StatusURL)
+	h.write(w, status, result)
 }
 
 // manual rejects unknown/unbounded input and returns the durable run reference.
@@ -259,7 +309,7 @@ func (h *Handler) fail(w http.ResponseWriter, err error) {
 		status, code = http.StatusNotFound, "NOT_FOUND"
 	case errors.Is(err, state.ErrExpired):
 		status, code = http.StatusGone, "EXPIRED"
-	case errors.Is(err, state.ErrIntegrity):
+	case errors.Is(err, state.ErrIntegrity), errors.Is(err, state.ErrConflict):
 		status, code = http.StatusConflict, "REQUEST_CONFLICT"
 	}
 	h.write(w, status, map[string]string{"error": code})

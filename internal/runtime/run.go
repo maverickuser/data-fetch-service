@@ -120,7 +120,7 @@ func Start(ctx context.Context, kind string, d Dependencies) error {
 		handler := &admission.Ingress{Service: service, Store: store, Mappings: mappings}
 		d.Start(handler.Handle)
 	} else {
-		handler := &api.Handler{Service: service, Store: store, Coordinator: coordinator, Config: cfg, Now: time.Now}
+		handler := &api.Handler{Service: service, Recovery: service, Store: store, Coordinator: coordinator, Config: cfg, Now: time.Now}
 		adapter := api.Lambda{Handler: handler.Routes()}
 		d.Start(adapter.Handle)
 	}

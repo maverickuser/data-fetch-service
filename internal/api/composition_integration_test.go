@@ -106,7 +106,69 @@ func integrationHandler(t *testing.T, objects *integrationObjects, queue *integr
 	clock := func() time.Time { return now }
 	coord := state.NewCoordinator(store, clock)
 	service := &admission.Service{Config: unit.Config, Coordinator: coord, Publisher: queue, Now: clock, NewID: func() string { return id }}
-	return &Handler{Service: service, Store: store, Coordinator: coord, Config: unit.Config, Now: clock}, service
+	return &Handler{Service: service, Recovery: service, Store: store, Coordinator: coord, Config: unit.Config, Now: clock}, service
+}
+
+func TestHTTPCompositionFullRerunUsesPinnedSnapshot(t *testing.T) {
+	now := time.Date(2026, 9, 21, 14, 30, 0, 0, time.UTC)
+	objects := &integrationObjects{objects: map[string]state.Object{}, now: now}
+	queue := &integrationQueue{}
+	h, service := integrationHandler(t, objects, queue, now, "root")
+	if response := call(h, "POST", "/v1/events/daily-bhavcopy/runs", `{"inputs":{"exchangeName":"BSE"}}`); response.Code != 202 {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	root, err := h.Coordinator.ReadRun(context.Background(), "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var original events.Snapshot
+	if json.Unmarshal(root.Snapshot, &original) != nil {
+		t.Fatal("missing snapshot")
+	}
+	coord := service.Coordinator.(*state.Coordinator)
+	key := "coordination/" + original.ExecutionKey + ".json"
+	lease, err := coord.ClaimDispatched(context.Background(), key, "root", "pull", "worker", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coord.Commit(context.Background(), key, lease, state.Transition{RunID: "root", Sequence: 2, Phase: domain.Failed, At: now}); err != nil {
+		t.Fatal(err)
+	}
+	service.Now = func() time.Time { return now.Add(3 * 24 * time.Hour) }
+	service.Config.Events = nil // The rerun must use the pinned snapshot, not the current event catalog.
+	nextID := 0
+	service.NewID = func() string {
+		nextID++
+		if nextID == 1 {
+			return "child"
+		}
+		return fmt.Sprintf("candidate-%d", nextID)
+	}
+	response := call(h, "POST", "/v1/runs/root/reruns", `{"force":true}`)
+	if response.Code != 202 {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	child, err := h.Coordinator.ReadRun(context.Background(), "child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rerun events.Snapshot
+	if json.Unmarshal(child.Snapshot, &rerun) != nil || rerun.ParentRunID != "root" || rerun.ExecutionKey != original.ExecutionKey || rerun.Inputs["run_date"] != original.Inputs["run_date"] || rerun.Jobs[0].URL != original.Jobs[0].URL || !rerun.Force {
+		t.Fatal(rerun)
+	}
+	if response := call(h, "POST", "/v1/runs/root/reruns", `{"force":true}`); response.Code != 202 || !strings.Contains(response.Body.String(), `"reused":true`) {
+		t.Fatal("idempotent replay changed", response.Code, response.Body.String())
+	}
+	request := httptest.NewRequest("POST", "/v1/runs/root/reruns", strings.NewReader(`{"force":true}`))
+	request.Header.Set("Idempotency-Key", "different-rerun")
+	blocked := httptest.NewRecorder()
+	h.Routes().ServeHTTP(blocked, request)
+	if blocked.Code != 409 {
+		t.Fatal("second active rerun admitted", blocked.Code)
+	}
+	if len(queue.runs) != 2 || queue.runs[0] != "pull:root" || queue.runs[1] != "pull:child" {
+		t.Fatal(queue.runs)
+	}
 }
 
 func TestHTTPCompositionConcurrentFirstRequestAcrossMidnight(t *testing.T) {

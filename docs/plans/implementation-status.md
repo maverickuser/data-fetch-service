@@ -1,6 +1,6 @@
 # Implementation status
 
-Branch: `stack/08-recovery`. No remote PR or AWS resources created. Foundation committed as `e4bbe13`; its separate agent review covered staged content, not the committed head. PR 02 is approved through `cd31c10`, PR 03 through `8763839`, PR 04 through `eefd677`, PR 05 through `0d8cd94`, PR 06 through `d94ba82`, and PR 07 through `a786f0c7`; exact-head local review records are under `.reports/`.
+Branch: `stack/09-full-rerun`. No remote PR or AWS resources created. Foundation committed as `e4bbe13`; its separate agent review covered staged content, not the committed head. PR 02 is approved through `cd31c10`, PR 03 through `8763839`, PR 04 through `eefd677`, PR 05 through `0d8cd94`, PR 06 through `d94ba82`, PR 07 through `a786f0c7`, and PR 08 through `5e8c708`; exact-head local review records are under `.reports/`.
 
 | Increment | Status |
 |---|---|
@@ -11,8 +11,9 @@ Branch: `stack/08-recovery`. No remote PR or AWS resources created. Foundation c
 | 05 Acquisition and artifact storage | Implemented locally; independent committed-head review approved under `.reports/` |
 | 06 Complete-event pull orchestration | Implemented locally; independent committed-head review approved under `.reports/` |
 | 07 Processor delivery and acceptance | Implemented locally; independent committed-head review approved under `.reports/` |
-| 08 Reconciler and automatic retries | Implemented locally; deterministic checks pass; independent committed-head review pending |
-| 09–12 | Planned; not implemented |
+| 08 Reconciler and automatic retries | Implemented locally; independent committed-head review approved under `.reports/` |
+| 09a Full rerun | Implemented locally; deterministic checks pass; independent committed-head review pending |
+| 09b–12 | Planned; not implemented |
 
 Verified locally: gofmt/vet/staticcheck/errcheck; race/unit coverage greater than 95%; weighted-coverage regression checks; native and Linux/arm64 builds; configuration validation; documentation links; OpenAPI JSON/YAML parity. Current reports are in `.reports/`. CI YAML is prepared but has not run on GitHub.
 
@@ -30,6 +31,8 @@ PR 06 adds a Pull Lambda, complete-event group coordination, per-job result reco
 
 PR 07 adds the Delivery Lambda, immutable S3 manifest reference submission, bounded processor HTTP attempts, stable run-ID idempotency, durable per-attempt outcomes, strict 202/problem response validation, and accepted-baseline completion. `RecoverAccepted` repairs durably observed 202 outcomes through the real state coordinator without an extra processor call. `make check` passes 2349/2472 unit statements (95.02%) with mocked HTTP integration, native/Linux arm64 builds, and all lint/config/docs/OpenAPI gates. See [the local PR description](delivery-pr.md). Independent committed-head review approved `a786f0c7`; evidence is under `.reports/pr07-review.json`.
 
-PR 08 adds a bounded S3 cursor reconciler, recoverable expired ownership for prework and postdownload phases, fenced Pull child retries, and delivery-ledger resume. Recorded source failures terminate without a child even when the Pull invocation dies before its terminal transition; group-budget interruptions still enter the automatic retry chain. Root-run detail follows up to three child links, including a reserved child while its records are being repaired. `make check` passes 2749/2890 unit statements (95.12%), race tests, mocked integration, native/Linux arm64 builds, lint, configuration, docs, and contract parity. See [the local PR description](recovery-pr.md). This increment awaits independent committed-head review.
+PR 08 adds a bounded S3 cursor reconciler, recoverable expired ownership for prework and postdownload phases, fenced Pull child retries, and delivery-ledger resume. Recorded source failures terminate without a child even when the Pull invocation dies before its terminal transition; group-budget interruptions still enter the automatic retry chain. Root-run detail follows up to three child links, including a reserved child while its records are being repaired. `make check` passes 2749/2890 unit statements (95.12%), race tests, mocked integration, native/Linux arm64 builds, lint, configuration, docs, and contract parity. See [the local PR description](recovery-pr.md). Independent committed-head review approved `5e8c708`; evidence is under `.reports/pr08-review.json`.
 
-Next: PR 09 manual recovery endpoints and full mocked API contracts. Terraform and deployment remain later work. Live AWS/source tests are deferred until release.
+PR 09a adds `POST /v1/runs/{run_id}/reruns`, cloning the original resolved snapshot into a linked run with a fresh request identity and optional force choice. The real HTTP-to-admission-to-state integration test verifies pinned BSE source URL/date, an idempotent replay, and active-run protection. `make check` passes 2847/2993 unit statements (95.12%) and the existing lint, integration, build, config, docs, and contract gates. See [the local PR description](full-rerun-pr.md). This increment awaits independent committed-head review.
+
+Next: PR 09b delivery retry and remaining mocked API/telemetry contracts. Terraform and deployment remain later work. Live AWS/source tests are deferred until release.

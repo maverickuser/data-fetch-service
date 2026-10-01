@@ -21,6 +21,8 @@ type repositoryFake struct {
 	captured                                          state.RequestIntent
 	phase                                             domain.State
 	joined                                            bool
+	parentView                                        state.RunView
+	childViewErr                                      error
 }
 
 func (f *repositoryFake) ReadRequest(context.Context, string) (state.RequestIntent, error) {
@@ -45,7 +47,98 @@ func (f *repositoryFake) PublishPending(context.Context, string, state.Publisher
 	return f.publishErr
 }
 func (f *repositoryFake) ReadRun(_ context.Context, id string) (state.RunView, error) {
+	if f.parentView.RunID == id {
+		return f.parentView, f.viewErr
+	}
+	if f.childViewErr != nil {
+		return state.RunView{}, f.childViewErr
+	}
 	return state.RunView{RunID: id, Phase: f.phase}, f.viewErr
+}
+
+func TestFullRerunRejectsInvalidOrUnavailableParent(t *testing.T) {
+	for _, scenario := range []string{"missing-dependency", "parent-read", "nonterminal", "corrupt-snapshot", "no-jobs", "same-child-id", "zero-time", "admit", "conflicts", "repair", "publish", "child-read", "canceled"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, repo := serviceFixture(t)
+			parentRaw, err := events.BuildSnapshot(s.Config, events.Normalized{EventID: "original", Source: "urn:manual", OccurredAt: s.Now(), EventType: "daily-bhavcopy", Inputs: map[string]any{"exchangeName": "BSE"}}, "parent")
+			if err != nil {
+				t.Fatal(err)
+			}
+			repo.parentView = state.RunView{RunID: "parent", Phase: domain.Failed, LatestRunID: "parent", LatestPhase: domain.Failed, Snapshot: parentRaw}
+			s.NewID = func() string { return "child" }
+			ctx := context.Background()
+			switch scenario {
+			case "missing-dependency":
+				s.NewID = nil
+			case "parent-read":
+				repo.viewErr = errors.New("state unavailable")
+			case "nonterminal":
+				repo.parentView.Phase = domain.Pulling
+			case "corrupt-snapshot":
+				repo.parentView.Snapshot = json.RawMessage(`{`)
+			case "no-jobs":
+				var original events.Snapshot
+				_ = json.Unmarshal(parentRaw, &original)
+				original.Jobs = nil
+				repo.parentView.Snapshot, _ = json.Marshal(original)
+			case "same-child-id":
+				s.NewID = func() string { return "parent" }
+			case "zero-time":
+				s.Now = func() time.Time { return time.Time{} }
+			case "admit":
+				repo.admitErr = errors.New("S3 unavailable")
+			case "conflicts":
+				repo.conflicts = 20
+			case "repair":
+				repo.repairErr = errors.New("repair unavailable")
+			case "publish":
+				repo.publishErr = errors.New("SQS unavailable")
+			case "child-read":
+				repo.childViewErr = errors.New("history unavailable")
+			case "canceled":
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			if _, err := s.FullRerun(ctx, "parent", "retry-key", nil); err == nil {
+				t.Fatal("failure hidden", scenario)
+			}
+		})
+	}
+}
+
+func TestFullRerunPinsOriginalResolvedJobsAndForce(t *testing.T) {
+	s, repo := serviceFixture(t)
+	parentRaw, err := events.BuildSnapshot(s.Config, events.Normalized{EventID: "original", Source: "urn:manual", OccurredAt: s.Now(), EventType: "daily-bhavcopy", Inputs: map[string]any{"exchangeName": "BSE"}}, "parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.parentView = state.RunView{RunID: "parent", Phase: domain.Failed, LatestRunID: "parent", LatestPhase: domain.Failed, Snapshot: parentRaw}
+	s.NewID = func() string { return "child" }
+	force := true
+	result, err := s.FullRerun(context.Background(), "parent", "rerun-key", &force)
+	if err != nil || result.RunID != "child" || result.Status != domain.Queued {
+		t.Fatal(result, err)
+	}
+	var original, child events.Snapshot
+	if json.Unmarshal(parentRaw, &original) != nil || json.Unmarshal(repo.captured.Snapshot, &child) != nil {
+		t.Fatal("invalid snapshot")
+	}
+	if child.RunID != "child" || child.ParentRunID != "parent" || child.ExecutionKey != original.ExecutionKey || child.ConfigRevision != original.ConfigRevision || !child.Force || child.Inputs["tradeDate"] != original.Inputs["tradeDate"] || child.Jobs[0].URL != original.Jobs[0].URL {
+		t.Fatal(child)
+	}
+	if child.RequestKey == original.RequestKey || child.PayloadHash == original.PayloadHash {
+		t.Fatal("rerun retained old request identity")
+	}
+	repo.joined = true
+	if _, err := s.FullRerun(context.Background(), "parent", "another-key", nil); !errors.Is(err, state.ErrConflict) {
+		t.Fatal(err)
+	}
+	repo.joined = false
+	repo.parentView.LatestPhase = domain.Queued
+	if _, err := s.FullRerun(context.Background(), "parent", "blocked-key", nil); !errors.Is(err, state.ErrConflict) {
+		t.Fatal(err)
+	}
 }
 
 func serviceFixture(t *testing.T) (*Service, *repositoryFake) {

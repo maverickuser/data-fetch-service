@@ -20,6 +20,8 @@ Idempotency-Key: daily-bse-2026-09-21
 {"inputs":{"exchangeName":"BSE","run_date":"2026-09-21"},"force":false}
 ```
 
+`POST /v1/runs/{run_id}/reruns` accepts an optional JSON `force` boolean and `Idempotency-Key` header. It starts a linked full pull from the original admitted snapshot and resolved date, so operators must submit a fresh event when they intend to use current source configuration. A different request while the same execution key is active returns 409.
+
 New/joined admissions return 202 with `run_id`, `status`, `reused` and `status_url`, plus `Location`. A retained terminal replay returns 200. Changed payloads under the same key return 409; malformed inputs return 400, oversized bodies 413, unknown resources 404, expired retained records 410 and transient infrastructure failures 503. Force is manual-only and does not replace an existing active run's choice.
 
 Run listings use UTC `from`/`to` dates, at most 30 days and 100 candidate records per page (default 25). Preserve the original date filters when following `next_cursor`. Individual run detail includes its immutable snapshot; listings omit snapshots. Pull/delivery metadata pages cap aggregate content at 1 MiB; a larger result returns 422 requesting a lower limit. Raw source response objects are never exposed by these routes.

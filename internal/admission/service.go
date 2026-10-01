@@ -52,6 +52,69 @@ func (s *Service) Manual(ctx context.Context, eventType, key string, inputs map[
 	return s.admit(ctx, event, true)
 }
 
+// FullRerun admits a linked run from the original resolved snapshot without re-resolving its source date or jobs.
+func (s *Service) FullRerun(ctx context.Context, parentRunID, key string, force *bool) (Result, error) {
+	if s.Coordinator == nil || s.Now == nil || s.NewID == nil {
+		return Result{}, ErrInvalid
+	}
+	view, err := s.Coordinator.ReadRun(ctx, parentRunID)
+	if err != nil {
+		return Result{}, err
+	}
+	if !view.Phase.Terminal() || view.LatestRunID != "" && !view.LatestPhase.Terminal() {
+		return Result{}, state.ErrConflict
+	}
+	var parent events.Snapshot
+	if json.Unmarshal(view.Snapshot, &parent) != nil || parent.SchemaVersion != 1 || parent.RunID != parentRunID {
+		return Result{}, state.ErrIntegrity
+	}
+	if key == "" {
+		key = s.NewID()
+	}
+	choice := parent.Force
+	if force != nil {
+		choice = *force
+	}
+	candidateID := s.NewID()
+	raw, err := events.CloneForFullRerun(parent, candidateID, key, choice)
+	if err != nil {
+		return Result{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	request, err := state.NewRequest(raw, s.Now())
+	if err != nil {
+		return Result{}, err
+	}
+	var receipt state.Resolution
+	for attempt := 0; attempt < 8; attempt++ {
+		if err = ctx.Err(); err != nil {
+			return Result{}, err
+		}
+		receipt, err = s.Coordinator.Admit(ctx, request)
+		if !errors.Is(err, state.ErrConflict) {
+			break
+		}
+	}
+	if err != nil {
+		return Result{}, err
+	}
+	if receipt.Joined {
+		return Result{}, state.ErrConflict
+	}
+	coordKey := "coordination/" + receipt.ExecutionKey + ".json"
+	if err = s.Coordinator.Repair(ctx, coordKey); err != nil {
+		return Result{}, err
+	}
+	if err = s.Coordinator.PublishPending(ctx, coordKey, s.Publisher); err != nil {
+		return Result{}, err
+	}
+	created, err := s.Coordinator.ReadRun(ctx, receipt.RunID)
+	if err != nil {
+		return Result{}, err
+	}
+	reused := receipt.RunID != candidateID
+	return Result{RunID: receipt.RunID, Status: created.Phase, Reused: reused, StatusURL: "/v1/runs/" + receipt.RunID, CompletedReplay: reused && created.Phase.Terminal()}, nil
+}
+
 // External admits a normalized producer event; external transports cannot request force.
 func (s *Service) External(ctx context.Context, event events.Normalized) (Result, error) {
 	if event.Force {
