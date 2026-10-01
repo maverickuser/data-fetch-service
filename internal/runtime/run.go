@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/maverickuser/data-fetch-service/internal/admission"
 	"github.com/maverickuser/data-fetch-service/internal/api"
 	"github.com/maverickuser/data-fetch-service/internal/config"
+	"github.com/maverickuser/data-fetch-service/internal/delivery"
 	"github.com/maverickuser/data-fetch-service/internal/events"
 	"github.com/maverickuser/data-fetch-service/internal/pull"
 	"github.com/maverickuser/data-fetch-service/internal/queue"
@@ -41,7 +43,7 @@ func Run(kind string) error {
 
 // Start validates all local/deployment inputs before constructing network clients.
 func Start(ctx context.Context, kind string, d Dependencies) error {
-	if kind != "api" && kind != "admission" && kind != "pull" {
+	if kind != "api" && kind != "admission" && kind != "pull" && kind != "delivery" {
 		return fmt.Errorf("unknown Lambda kind")
 	}
 	base, err := d.ReadFile("config/events.yaml")
@@ -57,8 +59,8 @@ func Start(ctx context.Context, kind string, d Dependencies) error {
 		return err
 	}
 	cfg.DeploymentCommit = d.Env("DEPLOYMENT_COMMIT")
-	bucket, pullQueueURL, delivery := d.Env("STATE_BUCKET"), d.Env("PULL_QUEUE_URL"), d.Env("DELIVERY_QUEUE_URL")
-	if cfg.DeploymentCommit == "" || bucket == "" || pullQueueURL == "" || delivery == "" {
+	bucket, pullQueueURL, deliveryQueueURL := d.Env("STATE_BUCKET"), d.Env("PULL_QUEUE_URL"), d.Env("DELIVERY_QUEUE_URL")
+	if cfg.DeploymentCommit == "" || bucket == "" || pullQueueURL == "" || deliveryQueueURL == "" {
 		return fmt.Errorf("deployment commit, state bucket and queue URLs required")
 	}
 	mappingData, err := d.ReadFile("config/native-events.yaml")
@@ -87,7 +89,7 @@ func Start(ctx context.Context, kind string, d Dependencies) error {
 	}
 	store := state.New(objects)
 	coordinator := state.NewCoordinator(store, time.Now)
-	publisher := &queue.Publisher{Client: sqs.NewFromConfig(awsCfg), URLs: map[string]string{"pull": pullQueueURL, "delivery": delivery}}
+	publisher := &queue.Publisher{Client: sqs.NewFromConfig(awsCfg), URLs: map[string]string{"pull": pullQueueURL, "delivery": deliveryQueueURL}}
 	service := &admission.Service{Config: cfg, Coordinator: coordinator, Publisher: publisher, Now: time.Now, NewID: newID}
 	if kind == "pull" {
 		artifactBucket := d.Env("ARTIFACT_BUCKET")
@@ -101,6 +103,14 @@ func Start(ctx context.Context, kind string, d Dependencies) error {
 			return pinnedPullFetcher(fetcher, artifactClient, artifactBucket, defaults)
 		}}
 		d.Start((&pull.Ingress{Runner: worker, Store: store, NewToken: newID}).Handle)
+	} else if kind == "delivery" {
+		artifactBucket := d.Env("ARTIFACT_BUCKET")
+		if artifactBucket == "" {
+			return fmt.Errorf("artifact bucket required for delivery")
+		}
+		processorClient := &http.Client{Transport: &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 10 * time.Second}).DialContext, TLSHandshakeTimeout: 10 * time.Second}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		worker := &delivery.Service{Repository: store, Manifests: &storage.Reader{Client: s3.NewFromConfig(awsCfg), Bucket: artifactBucket, MaxBytes: 1 << 20}, Coordinator: coordinator, Client: processorClient, ArtifactBucket: artifactBucket, Now: time.Now}
+		d.Start((&delivery.Ingress{Runner: worker, Store: store, NewToken: newID}).Handle)
 	} else if kind == "admission" {
 		handler := &admission.Ingress{Service: service, Store: store, Mappings: mappings}
 		d.Start(handler.Handle)
