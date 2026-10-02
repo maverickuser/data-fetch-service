@@ -22,6 +22,12 @@ func readSnapshot(t *testing.T, c config.Config, e Normalized) Snapshot {
 	return snapshot
 }
 
+func TestDeliveryRetrySnapshotRequiresAdmittedParent(t *testing.T) {
+	if _, err := CloneForDeliveryRetry(Snapshot{}, "child", "retry", nil, ""); err == nil {
+		t.Fatal("accepted empty source snapshot")
+	}
+}
+
 func TestScheduledGoldenAndRetryAfterMidnight(t *testing.T) {
 	raw, err := os.ReadFile("testdata/bse-scheduled.json")
 	if err != nil {

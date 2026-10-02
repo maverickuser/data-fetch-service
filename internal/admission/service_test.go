@@ -4,15 +4,89 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/maverickuser/data-fetch-service/internal/acquisition"
 	"github.com/maverickuser/data-fetch-service/internal/config"
 	"github.com/maverickuser/data-fetch-service/internal/domain"
 	"github.com/maverickuser/data-fetch-service/internal/events"
 	"github.com/maverickuser/data-fetch-service/internal/state"
 )
+
+type retryArtifactFake struct{}
+
+func (retryArtifactFake) Read(context.Context, string) ([]byte, error) { return nil, state.ErrExpired }
+func (retryArtifactFake) Stat(context.Context, string, int64) error    { return state.ErrExpired }
+func (retryArtifactFake) Upload(context.Context, string, io.Reader) (acquisition.Artifact, error) {
+	return acquisition.Artifact{}, state.ErrExpired
+}
+
+type retryRecordFake struct{}
+
+func (retryRecordFake) Read(context.Context, string, time.Time) (state.Object, error) {
+	return state.Object{}, state.ErrNotFound
+}
+
+func TestDeliveryRetryReplaysPinnedIntentAndPropagatesFailures(t *testing.T) {
+	for _, scenario := range []string{"replay", "changed-option", "admit", "conflicts", "joined", "repair", "publish", "child-read", "canceled"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, repo := serviceFixture(t)
+			parentRaw, err := events.BuildSnapshot(s.Config, events.Normalized{EventID: "original", Source: "urn:manual", OccurredAt: s.Now(), EventType: "daily-bhavcopy", Inputs: map[string]any{"exchangeName": "BSE"}}, "parent")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var parent events.Snapshot
+			if err := json.Unmarshal(parentRaw, &parent); err != nil {
+				t.Fatal(err)
+			}
+			childRaw, err := events.CloneForDeliveryRetry(parent, "child", "retry-key", nil, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			repo.existing, err = state.NewRequest(childRaw, s.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.Artifacts = retryArtifactFake{}
+			s.ManifestStorage = retryArtifactFake{}
+			s.Records = retryRecordFake{}
+			s.ArtifactBucket = "artifacts"
+			ctx := context.Background()
+			current := false
+			switch scenario {
+			case "changed-option":
+				current = true
+			case "admit":
+				repo.admitErr = errors.New("state unavailable")
+			case "conflicts":
+				repo.conflicts = 20
+			case "joined":
+				repo.joined = true
+			case "repair":
+				repo.repairErr = errors.New("repair unavailable")
+			case "publish":
+				repo.publishErr = errors.New("SQS unavailable")
+			case "child-read":
+				repo.childViewErr = errors.New("history unavailable")
+			case "canceled":
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			result, err := s.DeliveryRetry(ctx, "parent", "retry-key", current)
+			if scenario == "replay" {
+				if err != nil || !result.Reused || result.RunID != "child" {
+					t.Fatal(result, err)
+				}
+			} else if err == nil {
+				t.Fatal("expected failure")
+			}
+		})
+	}
+}
 
 type repositoryFake struct {
 	existing                                          state.RequestIntent
@@ -23,6 +97,10 @@ type repositoryFake struct {
 	joined                                            bool
 	parentView                                        state.RunView
 	childViewErr                                      error
+	historyPage                                       state.HistoryPage
+	historyErr                                        error
+	coord                                             state.Coordination
+	loadErr                                           error
 }
 
 func (f *repositoryFake) ReadRequest(context.Context, string) (state.RequestIntent, error) {
@@ -54,6 +132,67 @@ func (f *repositoryFake) ReadRun(_ context.Context, id string) (state.RunView, e
 		return state.RunView{}, f.childViewErr
 	}
 	return state.RunView{RunID: id, Phase: f.phase}, f.viewErr
+}
+func (f *repositoryFake) History(context.Context, string, string, int32) (state.HistoryPage, error) {
+	return f.historyPage, f.historyErr
+}
+func (f *repositoryFake) Load(context.Context, string) (state.Coordination, string, error) {
+	return f.coord, "etag", f.loadErr
+}
+
+func TestDeliveryRetryRejectsInvalidParentAndUnavailableState(t *testing.T) {
+	for _, scenario := range []string{"parent-unavailable", "nonterminal", "history-unavailable", "empty-history", "wrong-stage", "corrupt-snapshot", "coordination-unavailable", "active-run"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, repo := serviceFixture(t)
+			parentRaw, err := events.BuildSnapshot(s.Config, events.Normalized{EventID: "original", Source: "urn:manual", OccurredAt: s.Now(), EventType: "daily-bhavcopy", Inputs: map[string]any{"exchangeName": "BSE"}}, "parent")
+			if err != nil {
+				t.Fatal(err)
+			}
+			repo.parentView = state.RunView{RunID: "parent", Phase: domain.Failed, LatestRunID: "parent", LatestPhase: domain.Failed, Snapshot: parentRaw}
+			repo.historyPage = state.HistoryPage{Transitions: []state.Transition{{Phase: domain.Failed, Details: json.RawMessage(`{"stage":"delivery"}`)}}}
+			s.Artifacts = retryArtifactFake{}
+			s.ManifestStorage = retryArtifactFake{}
+			s.Records = retryRecordFake{}
+			s.ArtifactBucket = "artifacts"
+			switch scenario {
+			case "parent-unavailable":
+				repo.viewErr = errors.New("S3 unavailable")
+			case "nonterminal":
+				repo.parentView.Phase = domain.Pulling
+			case "history-unavailable":
+				repo.historyErr = errors.New("history unavailable")
+			case "empty-history":
+				repo.historyPage.Transitions = nil
+			case "wrong-stage":
+				repo.historyPage.Transitions[0].Details = json.RawMessage(`{"stage":"pull"}`)
+			case "corrupt-snapshot":
+				repo.parentView.Snapshot = json.RawMessage(`{`)
+			case "coordination-unavailable":
+				repo.loadErr = errors.New("coordination unavailable")
+			case "active-run":
+				repo.coord.ActiveRunID = "another"
+			}
+			if _, err := s.DeliveryRetry(context.Background(), "parent", "retry-key", false); err == nil {
+				t.Fatal("admitted invalid recovery")
+			}
+		})
+	}
+}
+
+func TestDeliveryRetryRequiresGeneratedKeyAndReadableRequestState(t *testing.T) {
+	s, repo := serviceFixture(t)
+	s.Artifacts = retryArtifactFake{}
+	s.ManifestStorage = retryArtifactFake{}
+	s.Records = retryRecordFake{}
+	s.ArtifactBucket = "artifacts"
+	s.NewID = func() string { return "" }
+	if _, err := s.DeliveryRetry(context.Background(), "parent", "", false); !errors.Is(err, ErrInvalid) {
+		t.Fatal(err)
+	}
+	repo.readErr = errors.New("request store unavailable")
+	if _, err := s.DeliveryRetry(context.Background(), "parent", "retry-key", false); !errors.Is(err, repo.readErr) {
+		t.Fatal(err)
+	}
 }
 
 func TestFullRerunRejectsInvalidOrUnavailableParent(t *testing.T) {

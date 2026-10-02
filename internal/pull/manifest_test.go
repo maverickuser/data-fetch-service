@@ -1,6 +1,7 @@
 package pull
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,7 +13,85 @@ import (
 	"github.com/maverickuser/data-fetch-service/internal/acquisition"
 	"github.com/maverickuser/data-fetch-service/internal/config"
 	"github.com/maverickuser/data-fetch-service/internal/events"
+	"github.com/maverickuser/data-fetch-service/internal/state"
 )
+
+type retainedStat func(context.Context, string, int64) error
+
+func (f retainedStat) Stat(ctx context.Context, key string, size int64) error {
+	return f(ctx, key, size)
+}
+
+func TestDeliveryRetryManifestReuseRejectsChangedSource(t *testing.T) {
+	parent, results := manifestFixture(t, "daily-bhavcopy")
+	original, err := BuildManifest(parent, results, "artifacts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := events.CloneForDeliveryRetry(parent, "child", "retry", nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var child events.Snapshot
+	if err := json.Unmarshal(raw, &child); err != nil {
+		t.Fatal(err)
+	}
+	reused, err := ReuseManifest(parent, child, original, "artifacts")
+	if err != nil || reused.Data.RunID != "child" || reused.Data.Files[0].Key != original.Data.Files[0].Key {
+		t.Fatal(reused, err)
+	}
+	for _, scenario := range []string{"wrong-parent", "wrong-file-bucket", "missing-file", "changed-hash", "changed-input", "invalid-child-config"} {
+		t.Run(scenario, func(t *testing.T) {
+			p, c, m := parent, child, original
+			m.Data.Files = append([]File(nil), original.Data.Files...)
+			switch scenario {
+			case "wrong-parent":
+				c.ParentRunID = "other"
+			case "wrong-file-bucket":
+				m.Data.Files[0].Bucket = "other"
+			case "missing-file":
+				m.Data.Files = nil
+			case "changed-hash":
+				m.Data.Files[0].SHA256 = strings.Repeat("a", 64)
+			case "changed-input":
+				c.Inputs = map[string]string{"exchangeName": "OTHER"}
+			case "invalid-child-config":
+				c.Config.Events = nil
+			}
+			if _, err := ReuseManifest(p, c, m, "artifacts"); err == nil {
+				t.Fatal("accepted altered source")
+			}
+		})
+	}
+}
+
+func TestRetainedFilesRequireCompleteAvailableObjects(t *testing.T) {
+	parent, results := manifestFixture(t, "daily-bhavcopy")
+	manifest, err := BuildManifest(parent, results, "artifacts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat := retainedStat(func(_ context.Context, key string, size int64) error {
+		if key != results[0].Artifact.Key || size != 3 {
+			t.Fatal(key, size)
+		}
+		return nil
+	})
+	if err := VerifyRetainedFiles(context.Background(), manifest, "artifacts", stat); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyRetainedFiles(context.Background(), manifest, "artifacts", nil); err != state.ErrIntegrity {
+		t.Fatal(err)
+	}
+	manifest.Data.Files[0].Bucket = "other"
+	if err := VerifyRetainedFiles(context.Background(), manifest, "artifacts", stat); err != state.ErrIntegrity {
+		t.Fatal(err)
+	}
+	manifest.Data.Files[0].Bucket = "artifacts"
+	if err := VerifyRetainedFiles(context.Background(), manifest, "artifacts", retainedStat(func(context.Context, string, int64) error { return state.ErrExpired })); err != state.ErrExpired {
+		t.Fatal(err)
+	}
+}
 
 func manifestFixture(t *testing.T, eventType string) (events.Snapshot, []acquisition.Result) {
 	t.Helper()

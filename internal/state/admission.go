@@ -140,6 +140,19 @@ func (c *Coordinator) Admit(ctx context.Context, candidate RequestIntent) (Resol
 	} else if !errors.Is(err, ErrNotFound) {
 		return Resolution{}, err
 	}
+	var snapshot events.Snapshot
+	if err := json.Unmarshal(r.Snapshot, &snapshot); err != nil {
+		return Resolution{}, err
+	}
+	if snapshot.DeliveryRetry != nil {
+		baselineRunID := ""
+		if current.AcceptedBaseline != nil {
+			baselineRunID = current.AcceptedBaseline.RunID
+		}
+		if current.ActiveRunID != "" || baselineRunID != snapshot.DeliveryRetry.ExpectedBaselineRunID {
+			return Resolution{}, ErrConflict
+		}
+	}
 	receipt := Resolution{RequestKey: r.RequestKey, ExecutionKey: r.ExecutionKey, PayloadHash: r.PayloadHash, RunID: current.ActiveRunID, Joined: current.ActiveRunID != ""}
 	if !receipt.Joined {
 		receipt.RunID = r.CandidateRunID

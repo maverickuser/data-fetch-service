@@ -2,16 +2,19 @@
 package pull
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/maverickuser/data-fetch-service/internal/acquisition"
 	"github.com/maverickuser/data-fetch-service/internal/events"
+	"github.com/maverickuser/data-fetch-service/internal/state"
 )
 
 // File is one complete raw artifact the processor may read.
@@ -110,6 +113,59 @@ func BuildManifest(snapshot events.Snapshot, results []acquisition.Result, bucke
 	hash := sha256.Sum256(canonical)
 	manifest.Data.DatasetFingerprint = "sha256:" + hex.EncodeToString(hash[:])
 	return manifest, nil
+}
+
+// ReuseManifest validates every original file against its admitted job before creating a child manifest.
+func ReuseManifest(parent, child events.Snapshot, original Manifest, bucket string) (Manifest, error) {
+	if child.DeliveryRetry == nil || child.DeliveryRetry.SourceRunID != parent.RunID || child.ParentRunID != parent.RunID || child.ExecutionKey != parent.ExecutionKey || child.Event.EventType != parent.Event.EventType || !reflect.DeepEqual(child.Jobs, parent.Jobs) || !reflect.DeepEqual(child.Inputs, parent.Inputs) || child.Force != parent.Force || original.Data.RunID != parent.RunID {
+		return Manifest{}, fmt.Errorf("delivery retry source differs from admitted parent")
+	}
+	byJob := make(map[string]configFile, len(parent.Jobs))
+	for _, job := range parent.Jobs {
+		byJob[job.ID] = configFile{filename: job.Filename, format: job.Format}
+	}
+	results := make([]acquisition.Result, 0, len(original.Data.Files))
+	for _, file := range original.Data.Files {
+		job, ok := byJob[file.JobID]
+		if !ok || file.Bucket != bucket {
+			return Manifest{}, fmt.Errorf("invalid retained file")
+		}
+		results = append(results, acquisition.Result{JobID: file.JobID, Filename: job.filename, Format: job.format, Artifact: acquisition.Artifact{Key: file.Key, Bytes: file.SizeBytes, SHA256: file.SHA256}})
+	}
+	verified, err := BuildManifest(parent, results, bucket)
+	if err != nil || !reflect.DeepEqual(verified, original) {
+		return Manifest{}, fmt.Errorf("original manifest differs from admitted source")
+	}
+	// BuildManifest checks the source run's raw-key prefix; only the new manifest lives under the child run.
+	building := child
+	building.RunID = parent.RunID
+	manifest, err := BuildManifest(building, results, bucket)
+	if err != nil {
+		return Manifest{}, err
+	}
+	manifest.ID = "urn:bond-platform:manifest:" + child.RunID
+	manifest.Data.RunID = child.RunID
+	return manifest, nil
+}
+
+type configFile struct{ filename, format string }
+
+// VerifyRetainedFiles confirms that all manifest members are still available before dispatch.
+func VerifyRetainedFiles(ctx context.Context, manifest Manifest, bucket string, stat interface {
+	Stat(context.Context, string, int64) error
+}) error {
+	if stat == nil || bucket == "" || len(manifest.Data.Files) == 0 {
+		return state.ErrIntegrity
+	}
+	for _, file := range manifest.Data.Files {
+		if file.Bucket != bucket || file.SizeBytes < 1 || !strings.HasPrefix(file.Key, "runs/") {
+			return state.ErrIntegrity
+		}
+		if err := stat.Stat(ctx, file.Key, file.SizeBytes); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // manifestInputs pins processor-facing values to the admission-time logical inputs.

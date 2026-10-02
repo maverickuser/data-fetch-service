@@ -62,6 +62,30 @@ func TestAutomaticRetryTransfersWithoutReleasingClaim(t *testing.T) {
 	}
 }
 
+func TestDeliveryRetryWorkerTerminationDoesNotStartSourceRetry(t *testing.T) {
+	m, c := pullingRetryFixture(t)
+	key := "runs/root/snapshot.json"
+	object := m.objects[key]
+	var snapshot events.Snapshot
+	if err := json.Unmarshal(object.Data, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.DeliveryRetry = &events.DeliveryRetry{SourceRunID: "source"}
+	object.Data, _ = json.Marshal(snapshot)
+	m.objects[key] = object
+	child, err := c.ReservePullRetry(context.Background(), coordKey, "unwanted-child")
+	if err != nil || child != "" {
+		t.Fatal(child, err)
+	}
+	view, err := c.ReadRun(context.Background(), "root")
+	if err != nil || view.Phase != domain.Failed || view.ChildRunID != "" {
+		t.Fatal(view, err)
+	}
+	if _, exists := m.objects["runs/unwanted-child/snapshot.json"]; exists {
+		t.Fatal("source retry was created")
+	}
+}
+
 func TestAutomaticRetryRepairsInterruptedWrites(t *testing.T) {
 	for boundary := 1; boundary <= 7; boundary++ {
 		for _, after := range []bool{false, true} {

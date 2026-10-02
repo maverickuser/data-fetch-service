@@ -26,6 +26,61 @@ type Snapshot struct {
 	ParentRunID         string               `json:"parent_run_id,omitempty"`
 	RetryRootRunID      string               `json:"retry_root_run_id,omitempty"`
 	ExecutionRetryIndex int                  `json:"execution_retry_index,omitempty"`
+	DeliveryRetry       *DeliveryRetry       `json:"delivery_retry,omitempty"`
+}
+
+// DeliveryRetry pins the source files and baseline observed when recovery was requested.
+type DeliveryRetry struct {
+	SourceRunID           string `json:"source_run_id"`
+	UseCurrentProcessor   bool   `json:"use_current_processor_config"`
+	ExpectedBaselineRunID string `json:"expected_baseline_run_id,omitempty"`
+	OldConfigRevision     string `json:"old_config_revision"`
+	NewConfigRevision     string `json:"new_config_revision"`
+	OldProcessorURL       string `json:"old_processor_url"`
+	NewProcessorURL       string `json:"new_processor_url"`
+}
+
+// CloneForDeliveryRetry keeps resolved source jobs while selecting a processor profile explicitly.
+func CloneForDeliveryRetry(parent Snapshot, runID, requestID string, current *config.Config, baselineRunID string) ([]byte, error) {
+	if parent.SchemaVersion != 1 || parent.RunID == "" || parent.ExecutionKey == "" || len(parent.Jobs) == 0 || runID == "" || runID == parent.RunID || requestID == "" || parent.DeliveryRetry != nil {
+		return nil, fmt.Errorf("invalid delivery retry snapshot")
+	}
+	child := parent
+	child.RunID = runID
+	child.ParentRunID = parent.RunID
+	child.RetryRootRunID = ""
+	child.ExecutionRetryIndex = 0
+	child.Event.Source = "urn:bond-platform:delivery-retry:" + parent.RunID
+	child.Event.EventID = requestID
+	child.Event.Original = nil
+	child.DeliveryRetry = &DeliveryRetry{SourceRunID: parent.RunID, UseCurrentProcessor: current != nil, ExpectedBaselineRunID: baselineRunID, OldConfigRevision: parent.ConfigRevision, OldProcessorURL: parent.Config.Processor.URL}
+	if current != nil {
+		child.Config.Processor = current.Processor
+		if err := child.Config.Validate(); err != nil {
+			return nil, err
+		}
+		child.ConfigRevision = child.Config.Revision()
+	}
+	child.DeliveryRetry.NewConfigRevision = child.ConfigRevision
+	child.DeliveryRetry.NewProcessorURL = child.Config.Processor.URL
+	requestKey, err := domain.RequestKey(child.Event.Source, requestID)
+	if err != nil {
+		return nil, err
+	}
+	child.RequestKey = requestKey
+	canonical := child.Event
+	canonical.Inputs = make(map[string]any, len(child.Inputs))
+	for name, value := range child.Inputs {
+		canonical.Inputs[name] = value
+	}
+	child.PayloadHash, err = digest(struct {
+		Event            Normalized
+		CurrentProcessor bool
+	}{canonical, current != nil})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(child)
 }
 
 // CloneForFullRerun preserves resolved jobs and dates while assigning a fresh manual request identity.
@@ -38,6 +93,7 @@ func CloneForFullRerun(parent Snapshot, runID, requestID string, force bool) ([]
 	child.ParentRunID = parent.RunID
 	child.RetryRootRunID = ""
 	child.ExecutionRetryIndex = 0
+	child.DeliveryRetry = nil
 	child.Force = force
 	child.Event.Source = "urn:bond-platform:manual-rerun:" + parent.RunID
 	child.Event.EventID = requestID

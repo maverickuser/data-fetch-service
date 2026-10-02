@@ -4,8 +4,12 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http/httptest"
 	"net/url"
 	"sort"
@@ -14,11 +18,391 @@ import (
 	"testing"
 	"time"
 
+	"github.com/maverickuser/data-fetch-service/internal/acquisition"
 	"github.com/maverickuser/data-fetch-service/internal/admission"
+	"github.com/maverickuser/data-fetch-service/internal/config"
 	"github.com/maverickuser/data-fetch-service/internal/domain"
 	"github.com/maverickuser/data-fetch-service/internal/events"
+	"github.com/maverickuser/data-fetch-service/internal/pull"
 	"github.com/maverickuser/data-fetch-service/internal/state"
 )
+
+type retryArtifacts struct{ data map[string][]byte }
+type unavailableStat struct{ *retryArtifacts }
+
+func (unavailableStat) Stat(context.Context, string, int64) error {
+	return errors.New("S3 unavailable")
+}
+
+type invalidUpload struct{ *retryArtifacts }
+
+func (a invalidUpload) Upload(context.Context, string, io.Reader) (acquisition.Artifact, error) {
+	return acquisition.Artifact{Key: "wrong", Bytes: 1, SHA256: strings.Repeat("a", 64)}, nil
+}
+
+type integrationFetch func(context.Context, string, config.ResolvedJob) (acquisition.Result, error)
+
+func (f integrationFetch) Fetch(ctx context.Context, run string, job config.ResolvedJob) (acquisition.Result, error) {
+	return f(ctx, run, job)
+}
+func (a *retryArtifacts) Upload(_ context.Context, key string, source io.Reader) (acquisition.Artifact, error) {
+	data, err := io.ReadAll(source)
+	if err != nil {
+		return acquisition.Artifact{}, err
+	}
+	if _, exists := a.data[key]; exists {
+		return acquisition.Artifact{}, state.ErrIntegrity
+	}
+	a.data[key] = data
+	hash := sha256.Sum256(data)
+	return acquisition.Artifact{Key: key, Bytes: int64(len(data)), SHA256: hex.EncodeToString(hash[:])}, nil
+}
+func (a *retryArtifacts) Read(_ context.Context, key string) ([]byte, error) {
+	data, ok := a.data[key]
+	if !ok {
+		return nil, state.ErrExpired
+	}
+	return data, nil
+}
+func (a *retryArtifacts) Stat(_ context.Context, key string, size int64) error {
+	data, ok := a.data[key]
+	if !ok || int64(len(data)) != size {
+		return state.ErrExpired
+	}
+	return nil
+}
+
+func retryComposition(t *testing.T) (*Handler, *admission.Service, *integrationObjects, *integrationQueue, *retryArtifacts, events.Snapshot) {
+	t.Helper()
+	now := time.Date(2026, 9, 21, 14, 30, 0, 0, time.UTC)
+	objects := &integrationObjects{objects: map[string]state.Object{}, now: now}
+	queue := &integrationQueue{}
+	h, service := integrationHandler(t, objects, queue, now, "root")
+	if response := call(h, "POST", "/v1/events/daily-bhavcopy/runs", `{"inputs":{"exchangeName":"BSE"}}`); response.Code != 202 {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	view, err := h.Coordinator.ReadRun(context.Background(), "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parent events.Snapshot
+	if json.Unmarshal(view.Snapshot, &parent) != nil {
+		t.Fatal("snapshot")
+	}
+	artifacts := &retryArtifacts{data: map[string][]byte{}}
+	raw := []byte("trade data")
+	fileKey := "runs/root/raw/" + parent.Jobs[0].ID + "/" + parent.Jobs[0].Filename
+	artifacts.data[fileKey] = raw
+	hash := sha256.Sum256(raw)
+	manifest, err := pull.BuildManifest(parent, []acquisition.Result{{JobID: parent.Jobs[0].ID, Filename: parent.Jobs[0].Filename, Format: parent.Jobs[0].Format, Artifact: acquisition.Artifact{Key: fileKey, Bytes: int64(len(raw)), SHA256: hex.EncodeToString(hash[:])}}}, "artifacts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := pull.MarshalManifest(manifest)
+	artifacts.data["runs/root/manifest.json"] = encoded
+	coord := service.Coordinator.(*state.Coordinator)
+	coordKey := "coordination/" + parent.ExecutionKey + ".json"
+	lease, err := coord.ClaimDispatched(context.Background(), coordKey, "root", "pull", "worker", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, transition := range []state.Transition{{RunID: "root", Sequence: 2, Phase: domain.Pulling, At: now}, {RunID: "root", Sequence: 3, Phase: domain.DownloadsCompleted, At: now}, {RunID: "root", Sequence: 4, Phase: domain.DeliveryPending, At: now}} {
+		if err := coord.Commit(context.Background(), coordKey, lease, transition); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := coord.PublishPending(context.Background(), coordKey, queue); err != nil {
+		t.Fatal(err)
+	}
+	deliveryLease, err := coord.ClaimDispatched(context.Background(), coordKey, "root", "delivery", "delivery-worker", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coord.Commit(context.Background(), coordKey, deliveryLease, state.Transition{RunID: "root", Sequence: 5, Phase: domain.Failed, At: now, Details: json.RawMessage(`{"stage":"delivery","code":"PROCESSOR_UNAVAILABLE"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	service.Artifacts = artifacts
+	service.ManifestStorage = artifacts
+	service.ArtifactBucket = "artifacts"
+	service.Records = state.New(objects)
+	service.NewID = func() string { return "child" }
+	h.DeliveryRecovery = service
+	return h, service, objects, queue, artifacts, parent
+}
+
+func TestHTTPCompositionDeliveryRetryReusesRetainedFiles(t *testing.T) {
+	h, service, objects, queue, artifacts, parent := retryComposition(t)
+	service.Config.Processor.Enabled = true
+	service.Config.Processor.URL = "https://processor.internal/v1/event-ingestions"
+	response := call(h, "POST", "/v1/runs/root/delivery-retries", `{"use_current_processor_config":true}`)
+	if response.Code != 202 {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	child, err := h.Coordinator.ReadRun(context.Background(), "child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pinned events.Snapshot
+	if json.Unmarshal(child.Snapshot, &pinned) != nil || pinned.DeliveryRetry == nil || pinned.DeliveryRetry.OldProcessorURL != parent.Config.Processor.URL || pinned.DeliveryRetry.NewProcessorURL != service.Config.Processor.URL {
+		t.Fatal(pinned)
+	}
+	if got := call(h, "POST", "/v1/runs/root/delivery-retries", `{"use_current_processor_config":true}`); got.Code != 202 || !strings.Contains(got.Body.String(), `"reused":true`) {
+		t.Fatal(got.Code, got.Body.String())
+	}
+	if got := call(h, "POST", "/v1/runs/root/delivery-retries", `{}`); got.Code != 409 {
+		t.Fatal(got.Code)
+	}
+	fetches := 0
+	worker := &pull.Service{Repository: state.New(objects), Coordinator: service.Coordinator.(*state.Coordinator), Fetcher: integrationFetch(func(context.Context, string, config.ResolvedJob) (acquisition.Result, error) {
+		fetches++
+		return acquisition.Result{}, errors.New("unexpected source call")
+	}), ManifestStorage: artifacts, ArtifactReader: artifacts, Publisher: queue, ArtifactBucket: "artifacts", Now: service.Now}
+	if err := worker.Run(context.Background(), "child", "worker-child", service.Now().Add(15*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if fetches != 0 || len(queue.runs) != 4 || queue.runs[3] != "delivery:child" {
+		t.Fatal(fetches, queue.runs)
+	}
+	child, err = h.Coordinator.ReadRun(context.Background(), "child")
+	if err != nil || child.Phase != domain.DeliveryPending {
+		t.Fatal(child, err)
+	}
+	var reused pull.Manifest
+	if json.Unmarshal(artifacts.data["runs/child/manifest.json"], &reused) != nil || reused.Data.Files[0].Key != "runs/root/raw/"+parent.Jobs[0].ID+"/"+parent.Jobs[0].Filename {
+		t.Fatal(reused)
+	}
+}
+
+func TestHTTPCompositionDeliveryRetryExpiryAndStaleBaseline(t *testing.T) {
+	h, service, objects, _, artifacts, parent := retryComposition(t)
+	fileKey := "runs/root/raw/" + parent.Jobs[0].ID + "/" + parent.Jobs[0].Filename
+	delete(artifacts.data, fileKey)
+	if got := call(h, "POST", "/v1/runs/root/delivery-retries", `{}`); got.Code != 410 {
+		t.Fatal(got.Code, got.Body.String())
+	}
+	artifacts.data[fileKey] = []byte("trade data")
+	coord := service.Coordinator.(*state.Coordinator)
+	key := "coordination/" + parent.ExecutionKey + ".json"
+	current, etag, err := coord.Load(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := state.Acceptance{RunID: "newer", Fingerprint: "sha256:different", AcceptedAt: service.Now().Add(time.Minute)}
+	data, _ := json.Marshal(accepted)
+	store := state.New(objects)
+	acceptanceKey := "acceptance/" + parent.ExecutionKey + "/newer.json"
+	if err := store.Create(context.Background(), acceptanceKey, data); err != nil {
+		t.Fatal(err)
+	}
+	current.AcceptedBaseline = &state.Baseline{RunID: "newer", Fingerprint: accepted.Fingerprint, AcceptanceKey: acceptanceKey}
+	data, _ = json.Marshal(current)
+	if _, err := store.CompareAndSwap(context.Background(), key, data, etag); err != nil {
+		t.Fatal(err)
+	}
+	if got := call(h, "POST", "/v1/runs/root/delivery-retries", `{}`); got.Code != 409 {
+		t.Fatal(got.Code, got.Body.String())
+	}
+}
+
+func TestHTTPCompositionDeliveryRetryRejectsWrongStageAndExpiredManifest(t *testing.T) {
+	h, _, objects, _, artifacts, _ := retryComposition(t)
+	delete(artifacts.data, "runs/root/manifest.json")
+	if got := call(h, "POST", "/v1/runs/root/delivery-retries", `{}`); got.Code != 410 {
+		t.Fatal(got.Code)
+	}
+	// A recorded pull failure must require a full rerun even if a manifest happens to exist.
+	key := "runs/root/history/00000000000000000005.json"
+	entry := state.Transition{RunID: "root", Sequence: 5, Phase: domain.Failed, At: objects.now, Details: json.RawMessage(`{"stage":"pull"}`)}
+	raw, _ := json.Marshal(entry)
+	object := objects.objects[key]
+	object.Data = raw
+	objects.objects[key] = object
+	if got := call(h, "POST", "/v1/runs/root/delivery-retries", `{}`); got.Code != 409 {
+		t.Fatal(got.Code, got.Body.String())
+	}
+}
+
+func TestHTTPCompositionDeliveryRetryFileExpiresAfterAdmission(t *testing.T) {
+	h, service, objects, queue, artifacts, parent := retryComposition(t)
+	if got := call(h, "POST", "/v1/runs/root/delivery-retries", `{}`); got.Code != 202 {
+		t.Fatal(got.Code, got.Body.String())
+	}
+	delete(artifacts.data, "runs/root/raw/"+parent.Jobs[0].ID+"/"+parent.Jobs[0].Filename)
+	fetches := 0
+	worker := &pull.Service{Repository: state.New(objects), Coordinator: service.Coordinator.(*state.Coordinator), Fetcher: integrationFetch(func(context.Context, string, config.ResolvedJob) (acquisition.Result, error) {
+		fetches++
+		return acquisition.Result{}, errors.New("unexpected source call")
+	}), ManifestStorage: artifacts, ArtifactReader: artifacts, Publisher: queue, ArtifactBucket: "artifacts", Now: service.Now}
+	if err := worker.Run(context.Background(), "child", "worker-child", service.Now().Add(15*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	view, err := h.Coordinator.ReadRun(context.Background(), "child")
+	if err != nil || view.Phase != domain.Failed || fetches != 0 || len(queue.runs) != 3 {
+		t.Fatal(view, err, fetches, queue.runs)
+	}
+}
+
+func TestHTTPCompositionDeliveryRetryPreflightFailures(t *testing.T) {
+	for _, scenario := range []string{"missing-dependencies", "missing-parent", "active-run", "corrupt-manifest", "manifest-upload-conflict", "invalid-current-config"} {
+		t.Run(scenario, func(t *testing.T) {
+			h, service, objects, _, artifacts, parent := retryComposition(t)
+			path := "/v1/runs/root/delivery-retries"
+			body := `{}`
+			want := 409
+			switch scenario {
+			case "missing-dependencies":
+				service.Artifacts = nil
+				want = 400
+			case "missing-parent":
+				path = "/v1/runs/unknown/delivery-retries"
+				want = 404
+			case "active-run":
+				coord := service.Coordinator.(*state.Coordinator)
+				key := "coordination/" + parent.ExecutionKey + ".json"
+				current, etag, err := coord.Load(context.Background(), key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				current.ActiveRunID = "another"
+				current.Phase = domain.Pulling
+				raw, _ := json.Marshal(current)
+				if _, err := state.New(objects).CompareAndSwap(context.Background(), key, raw, etag); err != nil {
+					t.Fatal(err)
+				}
+			case "corrupt-manifest":
+				artifacts.data["runs/root/manifest.json"] = []byte(`{`)
+			case "manifest-upload-conflict":
+				artifacts.data["runs/child/manifest.json"] = []byte(`occupied`)
+			case "invalid-current-config":
+				service.Config.Processor.URL = "http://insecure.example"
+				body = `{"use_current_processor_config":true}`
+				want = 400
+			}
+			if got := call(h, "POST", path, body); got.Code != want {
+				t.Fatal(got.Code, got.Body.String())
+			}
+		})
+	}
+}
+
+func TestHTTPCompositionDeliveryRetryAllowsOlderAcceptedBaseline(t *testing.T) {
+	h, service, objects, _, _, parent := retryComposition(t)
+	coord := service.Coordinator.(*state.Coordinator)
+	key := "coordination/" + parent.ExecutionKey + ".json"
+	current, etag, err := coord.Load(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := state.Acceptance{RunID: "older", Fingerprint: "sha256:old-dataset", AcceptedAt: service.Now().Add(-time.Hour)}
+	data, _ := json.Marshal(evidence)
+	store := state.New(objects)
+	acceptanceKey := "acceptance/" + parent.ExecutionKey + "/older.json"
+	if err := store.Create(context.Background(), acceptanceKey, data); err != nil {
+		t.Fatal(err)
+	}
+	current.AcceptedBaseline = &state.Baseline{RunID: "older", Fingerprint: evidence.Fingerprint, AcceptanceKey: acceptanceKey}
+	data, _ = json.Marshal(current)
+	if _, err := store.CompareAndSwap(context.Background(), key, data, etag); err != nil {
+		t.Fatal(err)
+	}
+	if got := call(h, "POST", "/v1/runs/root/delivery-retries", `{}`); got.Code != 202 {
+		t.Fatal(got.Code, got.Body.String())
+	}
+}
+
+func TestHTTPCompositionDeliveryRetryWorkerValidatesRetainedManifests(t *testing.T) {
+	for _, scenario := range []string{"parent-manifest-expired", "child-manifest-expired", "parent-manifest-corrupt", "child-manifest-corrupt", "reader-missing", "parent-snapshot-expired", "parent-snapshot-corrupt", "parent-manifest-changed", "stat-unavailable"} {
+		t.Run(scenario, func(t *testing.T) {
+			h, service, objects, queue, artifacts, _ := retryComposition(t)
+			if got := call(h, "POST", "/v1/runs/root/delivery-retries", `{}`); got.Code != 202 {
+				t.Fatal(got.Code, got.Body.String())
+			}
+			worker := &pull.Service{Repository: state.New(objects), Coordinator: service.Coordinator.(*state.Coordinator), Fetcher: integrationFetch(func(context.Context, string, config.ResolvedJob) (acquisition.Result, error) {
+				t.Fatal("source fetched")
+				return acquisition.Result{}, nil
+			}), ManifestStorage: artifacts, ArtifactReader: artifacts, Publisher: queue, ArtifactBucket: "artifacts", Now: service.Now}
+			switch scenario {
+			case "parent-manifest-expired":
+				delete(artifacts.data, "runs/root/manifest.json")
+			case "child-manifest-expired":
+				delete(artifacts.data, "runs/child/manifest.json")
+			case "parent-manifest-corrupt":
+				artifacts.data["runs/root/manifest.json"] = []byte(`{`)
+			case "child-manifest-corrupt":
+				artifacts.data["runs/child/manifest.json"] = []byte(`{`)
+			case "reader-missing":
+				worker.ArtifactReader = nil
+			case "parent-snapshot-expired":
+				delete(objects.objects, "runs/root/snapshot.json")
+			case "parent-snapshot-corrupt":
+				object := objects.objects["runs/root/snapshot.json"]
+				object.Data = []byte(`{`)
+				objects.objects["runs/root/snapshot.json"] = object
+			case "parent-manifest-changed":
+				var manifest pull.Manifest
+				if err := json.Unmarshal(artifacts.data["runs/root/manifest.json"], &manifest); err != nil {
+					t.Fatal(err)
+				}
+				manifest.Data.DatasetFingerprint = "sha256:tampered"
+				artifacts.data["runs/root/manifest.json"], _ = json.Marshal(manifest)
+			case "stat-unavailable":
+				worker.ArtifactReader = unavailableStat{artifacts}
+			}
+			err := worker.Run(context.Background(), "child", "worker-child", service.Now().Add(15*time.Minute))
+			if strings.Contains(scenario, "expired") {
+				view, readErr := h.Coordinator.ReadRun(context.Background(), "child")
+				if err != nil || readErr != nil || view.Phase != domain.Failed {
+					t.Fatal(err, readErr, view.Phase)
+				}
+			} else if scenario == "stat-unavailable" {
+				if err == nil || errors.Is(err, state.ErrExpired) {
+					t.Fatal(err)
+				}
+			} else if !errors.Is(err, state.ErrIntegrity) {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestHTTPCompositionDeliveryRetryRejectsCorruptEvidence(t *testing.T) {
+	for _, scenario := range []string{"missing-acceptance", "corrupt-acceptance", "changed-fingerprint", "wrong-upload-result"} {
+		t.Run(scenario, func(t *testing.T) {
+			h, service, objects, _, artifacts, parent := retryComposition(t)
+			if strings.Contains(scenario, "acceptance") {
+				coord := service.Coordinator.(*state.Coordinator)
+				key := "coordination/" + parent.ExecutionKey + ".json"
+				current, etag, err := coord.Load(context.Background(), key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				acceptanceKey := "acceptance/" + parent.ExecutionKey + "/missing.json"
+				current.AcceptedBaseline = &state.Baseline{RunID: "older", Fingerprint: "sha256:old", AcceptanceKey: acceptanceKey}
+				raw, _ := json.Marshal(current)
+				if _, err := state.New(objects).CompareAndSwap(context.Background(), key, raw, etag); err != nil {
+					t.Fatal(err)
+				}
+				if scenario == "corrupt-acceptance" {
+					objects.objects[acceptanceKey] = state.Object{Data: []byte(`{`), Modified: objects.now}
+				}
+			}
+			if scenario == "changed-fingerprint" {
+				var manifest pull.Manifest
+				if err := json.Unmarshal(artifacts.data["runs/root/manifest.json"], &manifest); err != nil {
+					t.Fatal(err)
+				}
+				manifest.Data.DatasetFingerprint = "sha256:tampered"
+				artifacts.data["runs/root/manifest.json"], _ = json.Marshal(manifest)
+			}
+			if scenario == "wrong-upload-result" {
+				service.ManifestStorage = invalidUpload{artifacts}
+			}
+			if got := call(h, "POST", "/v1/runs/root/delivery-retries", `{}`); got.Code != 409 {
+				t.Fatal(got.Code, got.Body.String())
+			}
+		})
+	}
+}
 
 type integrationObjects struct {
 	mu         sync.Mutex

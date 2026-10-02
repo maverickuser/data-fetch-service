@@ -262,6 +262,11 @@ func (s *Service) repairRequest(ctx context.Context, key string) error {
 	if err != nil {
 		return err
 	}
+	var snapshot events.Snapshot
+	// A rejected manual delivery retry may leave an intent; only its reserved admission can recover it.
+	if json.Unmarshal(intent.Snapshot, &snapshot) == nil && snapshot.DeliveryRetry != nil {
+		return nil
+	}
 	_, err = s.Coordinator.Admit(ctx, intent)
 	if errors.Is(err, state.ErrConflict) {
 		return nil

@@ -58,6 +58,14 @@ func (c *Coordinator) ReservePullRetry(ctx context.Context, key, childID string)
 	if json.Unmarshal(parentObject.Data, &parent) != nil || parent.SchemaVersion != 1 || parent.RunID != current.ActiveRunID || parent.ExecutionKey == "" || key != "coordination/"+parent.ExecutionKey+".json" || parent.ExecutionRetryIndex < 0 || parent.ExecutionRetryIndex > 3 {
 		return "", ErrIntegrity
 	}
+	if parent.DeliveryRetry != nil {
+		details, _ := json.Marshal(map[string]string{"stage": "delivery", "code": "WORKER_TERMINATED", "retry_guidance": "manual_delivery_retry"})
+		current.Pending = &Transition{RunID: parent.RunID, Sequence: current.LastSequence + 1, Phase: domain.Failed, At: c.now().UTC(), Details: details}
+		if err := c.save(ctx, key, current, etag); err != nil {
+			return "", err
+		}
+		return "", c.Repair(ctx, key)
+	}
 	failedCode, err := c.recordedPullFailure(ctx, parent)
 	if err != nil {
 		return "", err

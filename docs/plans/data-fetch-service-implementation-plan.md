@@ -199,22 +199,31 @@ Branch: `stack/09-full-rerun`; base: PR 08. LLD: sections 13–14, 16.
 
 Exit evidence: the real HTTP adapter, admission service, and conditional state coordinator create one linked child from a terminal parent, reject another active request, and preserve the pinned BSE/NSDL inputs without re-resolving against current configuration.
 
-## PR 09b — Delivery retry and complete mocked API contracts
+## PR 09b — Delivery retry from retained artifacts
 
 Branch: `stack/09-delivery-retry-api`; base: PR 09a. LLD: sections 13–14, 16.
 
 - Add the delivery-retry endpoint with idempotency, parent linkage, active-run protection, artifact-expiry checks, and stale-dataset protection.
 - Support explicit selection of current processor configuration for delivery retry and record the change in its snapshot.
-- Finish structured logs, correlation fields, metrics, and error projections across all handlers; telemetry should also be added with earlier components as they land.
+- Preserve a new immutable manifest under the child run while referring to the original complete files; the Pull worker must not call sources or start an automatic source retry for delivery-only recovery.
+
+Exit evidence: unit and mocked HTTP-to-state-to-worker tests verify idempotent replay, retained-file reuse, processor configuration selection, 410 on expired artifacts, and rejection of a newer different accepted dataset.
+
+## PR 09c — API contracts and telemetry completion
+
+Branch: `stack/09-api-telemetry`; base: PR 09b. LLD: sections 13–14, 16.
+
+- Finish structured logs, correlation fields, metrics, and error projections across all handlers.
 - Complete the mocked API/component suite covering the entire API-to-worker-to-processor flow, including reads during interrupted commits and automatic retries.
 
-Exit evidence: every route has success and meaningful failure integration coverage; delivery retry reuses complete retained files; expired files return 410; newer accepted data blocks stale delivery recovery.
+Exit evidence: every route has success and meaningful failure integration coverage; telemetry includes the durable run/request identity and does not expose secrets or source response bodies.
 
 ## PR 10 — Terraform runtime infrastructure
 
-Branch: `stack/10-infrastructure`; base: PR 09b. LLD: section 15.
+Branch: `stack/10-infrastructure`; base: PR 09c. LLD: section 15.
 
 - Provision artifact/state buckets with the agreed lifecycles, three queues/DLQs, five VPC-attached Lambdas, API Gateway, logs/metrics, scoped IAM, and mappings.
+- Grant the API and Pull roles artifact `HeadObject`/`GetObject` access plus prefix-scoped `ListBucket` where needed so S3 reports missing retained objects as 404; delivery retry maps expiry to HTTP 410 rather than conflating absence with access denial.
 - Provision or validate the selected VPC network inputs: private subnets in at least two Availability Zones, route tables, S3 gateway endpoint, SQS and CloudWatch Logs interface endpoints, endpoint policies/security groups, private DNS, NAT egress for public sources, and private connectivity to the processor in the same VPC. Assert that no Lambda subnet is public.
 - Consume the shared-network Terraform state used by `data-processing-service`; assert matching `vpc_id` values for Lambda subnets, endpoint resources, processor internal load balancer, and security groups. Apply the network state first, processor infrastructure second, and this service third. Do not create a second VPC in this stack.
 - Create `data-fetch-service-ingress` and export its URL/ARN. Parameterize approved external producer identities; the service owns queue infrastructure/policy and producer services own their sending identity permissions.

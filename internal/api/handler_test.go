@@ -19,19 +19,26 @@ import (
 )
 
 type apiFake struct {
-	result                admission.Result
-	err, scanErr, readErr error
-	event, key            string
-	force                 bool
-	inputs                map[string]any
-	view                  state.RunView
-	coord                 state.Coordination
-	page                  state.Page
-	records               map[string]state.Object
-	prefix, token         string
-	limit                 int32
-	rerunParent, rerunKey string
-	rerunForce            *bool
+	result                      admission.Result
+	err, scanErr, readErr       error
+	event, key                  string
+	force                       bool
+	inputs                      map[string]any
+	view                        state.RunView
+	coord                       state.Coordination
+	page                        state.Page
+	records                     map[string]state.Object
+	prefix, token               string
+	limit                       int32
+	rerunParent, rerunKey       string
+	rerunForce                  *bool
+	deliveryParent, deliveryKey string
+	deliveryCurrent             bool
+}
+
+func (f *apiFake) DeliveryRetry(_ context.Context, parent, key string, current bool) (admission.Result, error) {
+	f.deliveryParent, f.deliveryKey, f.deliveryCurrent = parent, key, current
+	return f.result, f.err
 }
 
 func (f *apiFake) FullRerun(_ context.Context, parent, key string, force *bool) (admission.Result, error) {
@@ -72,7 +79,40 @@ func handlerFixture(t *testing.T) (*Handler, *apiFake) {
 		t.Fatal(err)
 	}
 	f := &apiFake{result: admission.Result{RunID: "run", Status: domain.Queued, StatusURL: "/v1/runs/run"}, view: state.RunView{RunID: "run", Phase: domain.Queued}, coord: state.Coordination{ActiveRunID: "run"}, records: map[string]state.Object{}}
-	return &Handler{Service: f, Recovery: f, Coordinator: f, Store: f, Config: cfg, Now: func() time.Time { return time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC) }}, f
+	return &Handler{Service: f, Recovery: f, DeliveryRecovery: f, Coordinator: f, Store: f, Config: cfg, Now: func() time.Time { return time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC) }}, f
+}
+
+func TestDeliveryRetryHTTPContract(t *testing.T) {
+	h, fake := handlerFixture(t)
+	response := call(h, "POST", "/v1/runs/parent/delivery-retries", `{"use_current_processor_config":true}`)
+	if response.Code != 202 || response.Header().Get("Location") != "/v1/runs/run" || fake.deliveryParent != "parent" || fake.deliveryKey != "request-key" || !fake.deliveryCurrent {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	for _, body := range []string{`{"force":true}`, `{"use_current_processor_config":"yes"}`, `{`, `{} {`} {
+		if got := call(h, "POST", "/v1/runs/parent/delivery-retries", body); got.Code != 400 {
+			t.Fatal(body, got.Code)
+		}
+	}
+	fake.err = state.ErrExpired
+	if got := call(h, "POST", "/v1/runs/parent/delivery-retries", `{}`); got.Code != 410 {
+		t.Fatal(got.Code)
+	}
+	fake.err = state.ErrConflict
+	if got := call(h, "POST", "/v1/runs/parent/delivery-retries", `{}`); got.Code != 409 {
+		t.Fatal(got.Code)
+	}
+	fake.err = nil
+	fake.result.CompletedReplay = true
+	if got := call(h, "POST", "/v1/runs/parent/delivery-retries", ""); got.Code != 200 || fake.deliveryCurrent {
+		t.Fatal(got.Code)
+	}
+	if got := call(h, "POST", "/v1/runs/parent/delivery-retries", `{"x":"`+strings.Repeat("x", 65536)+`"}`); got.Code != 413 {
+		t.Fatal(got.Code)
+	}
+	h.DeliveryRecovery = nil
+	if got := call(h, "POST", "/v1/runs/parent/delivery-retries", `{}`); got.Code != 400 {
+		t.Fatal(got.Code)
+	}
 }
 
 func TestFullRerunHTTPContract(t *testing.T) {

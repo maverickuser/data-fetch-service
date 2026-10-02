@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -45,9 +46,13 @@ type Service struct {
 	Fetcher            Fetcher
 	FetcherForSnapshot func(config.Defaults) Fetcher
 	ManifestStorage    acquisition.Storage
-	Publisher          state.Publisher
-	ArtifactBucket     string
-	Now                func() time.Time
+	ArtifactReader     interface {
+		Read(context.Context, string) ([]byte, error)
+		Stat(context.Context, string, int64) error
+	}
+	Publisher      state.Publisher
+	ArtifactBucket string
+	Now            func() time.Time
 }
 
 var ErrOutcomePersistence = errors.New("pull result persistence failed")
@@ -101,6 +106,9 @@ func (s *Service) Run(ctx context.Context, runID, token string, deadline time.Ti
 	}
 	if err := s.Coordinator.Commit(ctx, key, lease, state.Transition{RunID: runID, Sequence: current.LastSequence + 1, Phase: domain.Pulling, At: now().UTC()}); err != nil {
 		return err
+	}
+	if snapshot.DeliveryRetry != nil {
+		return s.reuse(ctx, key, lease, snapshot, now)
 	}
 	groupCtx, cancel := context.WithDeadline(ctx, budgetDeadline)
 	defer cancel()
@@ -169,6 +177,67 @@ func (s *Service) Run(ctx context.Context, runID, token string, deadline time.Ti
 	}
 	if phase == domain.DeliveryPending {
 		return s.Coordinator.PublishPending(ctx, key, s.Publisher)
+	}
+	return nil
+}
+
+// reuse verifies the pinned child manifest and all retained files without making source requests.
+func (s *Service) reuse(ctx context.Context, key string, lease state.Lease, child events.Snapshot, now func() time.Time) error {
+	if s.ArtifactReader == nil || child.DeliveryRetry.SourceRunID != child.ParentRunID {
+		return state.ErrIntegrity
+	}
+	parentObject, err := s.Repository.Read(ctx, "runs/"+child.ParentRunID+"/snapshot.json", now())
+	if err != nil {
+		return s.failRetained(ctx, key, lease, now, err)
+	}
+	var parent events.Snapshot
+	if json.Unmarshal(parentObject.Data, &parent) != nil {
+		return state.ErrIntegrity
+	}
+	oldRaw, err := s.ArtifactReader.Read(ctx, "runs/"+parent.RunID+"/manifest.json")
+	if err != nil {
+		return s.failRetained(ctx, key, lease, now, err)
+	}
+	newRaw, err := s.ArtifactReader.Read(ctx, "runs/"+child.RunID+"/manifest.json")
+	if err != nil {
+		return s.failRetained(ctx, key, lease, now, err)
+	}
+	var original, actual Manifest
+	if json.Unmarshal(oldRaw, &original) != nil || json.Unmarshal(newRaw, &actual) != nil {
+		return state.ErrIntegrity
+	}
+	want, err := ReuseManifest(parent, child, original, s.ArtifactBucket)
+	if err != nil || !reflect.DeepEqual(want, actual) {
+		return state.ErrIntegrity
+	}
+	if err := VerifyRetainedFiles(ctx, actual, s.ArtifactBucket, s.ArtifactReader); err != nil {
+		return s.failRetained(ctx, key, lease, now, err)
+	}
+	owned, err := s.owned(ctx, key, lease, domain.Pulling, now())
+	if err != nil {
+		return err
+	}
+	details, _ := json.Marshal(struct {
+		Bucket      string `json:"bucket"`
+		ManifestKey string `json:"manifest_key"`
+		Fingerprint string `json:"dataset_fingerprint"`
+	}{s.ArtifactBucket, "runs/" + child.RunID + "/manifest.json", actual.Data.DatasetFingerprint})
+	if err := s.Coordinator.Commit(ctx, key, lease, state.Transition{RunID: child.RunID, Sequence: owned.LastSequence + 1, Phase: domain.DownloadsCompleted, At: now().UTC(), Details: details}); err != nil {
+		return err
+	}
+	if err := s.commitPhase(ctx, key, lease, domain.DeliveryPending, now(), details); err != nil {
+		return err
+	}
+	return s.Coordinator.PublishPending(ctx, key, s.Publisher)
+}
+
+// failRetained makes lifecycle expiry a terminal business failure instead of an execution retry.
+func (s *Service) failRetained(ctx context.Context, key string, lease state.Lease, now func() time.Time, cause error) error {
+	if !errors.Is(cause, state.ErrExpired) && !errors.Is(cause, state.ErrNotFound) {
+		return cause
+	}
+	if err := s.commitPhase(ctx, key, lease, domain.Failed, now(), failureDetails("delivery", "ARTIFACT_EXPIRED", "retained source files expired; full rerun required")); err != nil {
+		return errors.Join(cause, err)
 	}
 	return nil
 }

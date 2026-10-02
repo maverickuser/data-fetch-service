@@ -9,9 +9,47 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
+	"github.com/maverickuser/data-fetch-service/internal/state"
 )
 
 type readerAPI func(context.Context, *s3.GetObjectInput) (*s3.GetObjectOutput, error)
+
+type statAPI struct {
+	readerAPI
+	size int64
+	err  error
+}
+
+func (s statAPI) HeadObject(_ context.Context, _ *s3.HeadObjectInput, _ ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &s3.HeadObjectOutput{ContentLength: aws.Int64(s.size)}, nil
+}
+
+func TestRetainedArtifactStat(t *testing.T) {
+	r := &Reader{Client: statAPI{size: 42}, Bucket: "artifacts", MaxBytes: 100}
+	if err := r.Stat(context.Background(), "runs/root/raw/job/file.csv", 42); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Stat(context.Background(), "runs/root/raw/job/file.csv", 43); !errors.Is(err, state.ErrExpired) {
+		t.Fatal(err)
+	}
+	r.Client = statAPI{err: &smithy.GenericAPIError{Code: "NotFound"}}
+	if err := r.Stat(context.Background(), "runs/root/raw/job/file.csv", 42); !errors.Is(err, state.ErrExpired) {
+		t.Fatal(err)
+	}
+	r.Client = statAPI{err: errors.New("network")}
+	if err := r.Stat(context.Background(), "runs/root/raw/job/file.csv", 42); err == nil || errors.Is(err, state.ErrExpired) {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"other", "runs/../raw/x", "runs/root/manifest.json"} {
+		if err := r.Stat(context.Background(), key, 42); err == nil {
+			t.Fatal(key)
+		}
+	}
+}
 
 func (f readerAPI) GetObject(ctx context.Context, in *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
 	return f(ctx, in)

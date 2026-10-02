@@ -100,7 +100,7 @@ func Start(ctx context.Context, kind string, d Dependencies) error {
 		limits := acquisition.ConfiguredLimits(cfg.Defaults)
 		artifactClient := s3.NewFromConfig(awsCfg)
 		fetcher := &acquisition.Fetcher{Client: acquisition.GuardedClient(net.DefaultResolver, &net.Dialer{Timeout: 10 * time.Second}), Storage: &storage.Multipart{Client: artifactClient, Bucket: artifactBucket, MaxBytes: cfg.Defaults.MaxExtractedBytes}, Recorder: acquisition.StateRecorder{Store: store}, Budget: acquisition.NewBudget(cfg.Defaults.MaxTempBytes), Limits: limits, TempRoot: "/tmp", Now: time.Now}
-		worker := &pull.Service{Repository: store, Coordinator: coordinator, ManifestStorage: fetcher.Storage, Publisher: publisher, ArtifactBucket: artifactBucket, Now: time.Now, FetcherForSnapshot: func(defaults config.Defaults) pull.Fetcher {
+		worker := &pull.Service{Repository: store, Coordinator: coordinator, ManifestStorage: fetcher.Storage, ArtifactReader: &storage.Reader{Client: artifactClient, Bucket: artifactBucket, MaxBytes: 2 << 20}, Publisher: publisher, ArtifactBucket: artifactBucket, Now: time.Now, FetcherForSnapshot: func(defaults config.Defaults) pull.Fetcher {
 			return pinnedPullFetcher(fetcher, artifactClient, artifactBucket, defaults)
 		}}
 		d.Start((&pull.Ingress{Runner: worker, Store: store, NewToken: newID}).Handle)
@@ -120,7 +120,16 @@ func Start(ctx context.Context, kind string, d Dependencies) error {
 		handler := &admission.Ingress{Service: service, Store: store, Mappings: mappings}
 		d.Start(handler.Handle)
 	} else {
-		handler := &api.Handler{Service: service, Recovery: service, Store: store, Coordinator: coordinator, Config: cfg, Now: time.Now}
+		artifactBucket := d.Env("ARTIFACT_BUCKET")
+		if artifactBucket == "" {
+			return fmt.Errorf("artifact bucket required for API delivery retry")
+		}
+		artifactClient := s3.NewFromConfig(awsCfg)
+		service.Artifacts = &storage.Reader{Client: artifactClient, Bucket: artifactBucket, MaxBytes: 2 << 20}
+		service.ManifestStorage = &storage.Multipart{Client: artifactClient, Bucket: artifactBucket, MaxBytes: 2 << 20}
+		service.ArtifactBucket = artifactBucket
+		service.Records = store
+		handler := &api.Handler{Service: service, Recovery: service, DeliveryRecovery: service, Store: store, Coordinator: coordinator, Config: cfg, Now: time.Now}
 		adapter := api.Lambda{Handler: handler.Routes()}
 		d.Start(adapter.Handle)
 	}

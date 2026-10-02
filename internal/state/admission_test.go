@@ -42,6 +42,39 @@ func admitUntilResolved(t *testing.T, c *Coordinator, r RequestIntent) Resolutio
 	return Resolution{}
 }
 
+func TestDeliveryRetryAdmissionPinsBaselineAndRejectsActiveRun(t *testing.T) {
+	for _, scenario := range []string{"baseline-changed", "active-run"} {
+		t.Run(scenario, func(t *testing.T) {
+			m := newMemory()
+			c := NewCoordinator(New(m), func() time.Time { return m.now })
+			r := request(t, m, "delivery-request", "child")
+			var snapshot events.Snapshot
+			if err := json.Unmarshal(r.Snapshot, &snapshot); err != nil {
+				t.Fatal(err)
+			}
+			snapshot.DeliveryRetry = &events.DeliveryRetry{SourceRunID: "parent", ExpectedBaselineRunID: "old"}
+			r.Snapshot, _ = json.Marshal(snapshot)
+			current := Coordination{SchemaVersion: 1, AcceptedBaseline: &Baseline{RunID: "old"}}
+			if scenario == "baseline-changed" {
+				current.AcceptedBaseline.RunID = "new"
+			} else {
+				current.ActiveRunID = "other"
+				current.Phase = domain.Pulling
+			}
+			data, _ := json.Marshal(current)
+			if _, err := c.store.CompareAndSwap(context.Background(), coordKey, data, ""); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.Admit(context.Background(), r); !errors.Is(err, ErrConflict) {
+				t.Fatal(err)
+			}
+			if _, err := c.RequestResolution(context.Background(), r.RequestKey); !errors.Is(err, ErrNotFound) {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestAdmissionRepairsEveryWriteBoundary(t *testing.T) {
 	for _, after := range []bool{false, true} {
 		for boundary := 1; boundary <= 7; boundary++ {

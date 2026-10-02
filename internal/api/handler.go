@@ -21,17 +21,23 @@ import (
 
 // Handler shares durable admission with SQS; read routes never perform recovery.
 type Handler struct {
-	Service     ManualAdmission
-	Recovery    FullRerunAdmission
-	Store       Records
-	Coordinator Reader
-	Config      config.Config
-	Now         func() time.Time
+	Service          ManualAdmission
+	Recovery         FullRerunAdmission
+	DeliveryRecovery DeliveryRetryAdmission
+	Store            Records
+	Coordinator      Reader
+	Config           config.Config
+	Now              func() time.Time
 }
 
 // FullRerunAdmission creates a linked run from one terminal admitted snapshot.
 type FullRerunAdmission interface {
 	FullRerun(context.Context, string, string, *bool) (admission.Result, error)
+}
+
+// DeliveryRetryAdmission starts delivery against retained source files.
+type DeliveryRetryAdmission interface {
+	DeliveryRetry(context.Context, string, string, bool) (admission.Result, error)
 }
 
 // ManualAdmission is the application boundary used by the HTTP adapter.
@@ -58,6 +64,7 @@ func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/events/{event_type}/runs", h.manual)
 	mux.HandleFunc("POST /v1/runs/{run_id}/reruns", h.fullRerun)
+	mux.HandleFunc("POST /v1/runs/{run_id}/delivery-retries", h.deliveryRetry)
 	mux.HandleFunc("GET /v1/events/{event_type}", h.event)
 	mux.HandleFunc("GET /v1/events/{event_type}/active", h.active)
 	mux.HandleFunc("GET /v1/events/{event_type}/runs", h.listRuns)
@@ -77,6 +84,49 @@ func (h *Handler) Routes() http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// deliveryRetry accepts only an explicit processor-profile choice and idempotency key.
+func (h *Handler) deliveryRetry(w http.ResponseWriter, r *http.Request) {
+	if h.DeliveryRecovery == nil {
+		h.fail(w, admission.ErrInvalid)
+		return
+	}
+	var body struct {
+		UseCurrent bool `json:"use_current_processor_config"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil && err != io.EOF {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			h.write(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "BODY_TOO_LARGE"})
+			return
+		}
+		h.fail(w, admission.ErrInvalid)
+		return
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		h.fail(w, admission.ErrInvalid)
+		return
+	}
+	key := r.Header.Get("Idempotency-Key")
+	if len(key) > 256 {
+		h.fail(w, admission.ErrInvalid)
+		return
+	}
+	result, err := h.DeliveryRecovery.DeliveryRetry(r.Context(), r.PathValue("run_id"), key, body.UseCurrent)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	status := http.StatusAccepted
+	if result.CompletedReplay {
+		status = http.StatusOK
+	}
+	w.Header().Set("Location", result.StatusURL)
+	h.write(w, status, result)
 }
 
 // fullRerun accepts only an optional force choice and an idempotency key for a terminal run.
