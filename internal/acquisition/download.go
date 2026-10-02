@@ -135,6 +135,10 @@ func (w localWriter) Write(data []byte) (int, error) {
 // checkResponse rejects partial/error documents before allocating temporary storage.
 func checkResponse(response *http.Response, format string, now time.Time) error {
 	status := response.StatusCode
+	if status == http.StatusNotFound {
+		// A distinct code lets operators and smoke checks tell an unpublished file from other source errors.
+		return &Failure{Code: "SOURCE_NOT_FOUND", RetryAfter: retryAfter(response.Header.Get("Retry-After"), now)}
+	}
 	if status != http.StatusOK {
 		return &Failure{Code: "SOURCE_HTTP", Retryable: status == 408 || status == 429 || status >= 500 && status <= 599, RetryAfter: retryAfter(response.Header.Get("Retry-After"), now)}
 	}

@@ -1,0 +1,57 @@
+name: Smoke
+# Manual only. Runs against the deployed production service; it never deploys.
+on:
+  workflow_dispatch:
+    inputs:
+      fallback_weekdays:
+        description: Earlier weekdays to try when today's BSE file is unpublished (minimum 3)
+        default: '3'
+        required: true
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: smoke-prod
+  cancel-in-progress: false
+jobs:
+  smoke:
+    name: Real-endpoint smoke suite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment: prod
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'ap-south-1' }}
+      SMOKE_API_URL: ${{ vars.SMOKE_API_URL }}
+      SMOKE_NSDL_ISIN: ${{ vars.SMOKE_NSDL_ISIN }}
+      SMOKE_INGRESS_QUEUE_URL: ${{ vars.SMOKE_INGRESS_QUEUE_URL }}
+      SMOKE_ARTIFACT_BUCKET: ${{ vars.SMOKE_ARTIFACT_BUCKET }}
+      SMOKE_BSE_FALLBACK_WEEKDAYS: ${{ inputs.fallback_weekdays }}
+      SMOKE_COMMIT: ${{ github.sha }}
+      SMOKE_SUITE_ID: smoke-${{ github.run_id }}-${{ github.run_attempt }}
+      SMOKE_REPORT_PATH: smoke-report.json
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Preflight configuration
+        env:
+          AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+        run: |
+          missing=0
+          for name in AWS_ROLE_TO_ASSUME SMOKE_API_URL SMOKE_NSDL_ISIN SMOKE_INGRESS_QUEUE_URL SMOKE_ARTIFACT_BUCKET; do
+            if [ -z "${!name}" ]; then echo "::error::$name is not configured"; missing=1; fi
+          done
+          exit "$missing"
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: go run ./cmd/smoke
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: smoke-report
+          path: smoke-report.json
+          if-no-files-found: warn
