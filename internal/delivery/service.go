@@ -44,12 +44,18 @@ type HTTPClient interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
+// RequestSigner authorizes processor admission without changing the submission body.
+type RequestSigner interface {
+	Sign(context.Context, *http.Request, []byte) error
+}
+
 // Service delivers one accepted complete dataset under a fenced execution claim.
 type Service struct {
 	Repository     Repository
 	Manifests      ManifestReader
 	Coordinator    Coordinator
 	Client         HTTPClient
+	Signer         RequestSigner
 	ArtifactBucket string
 	Now            func() time.Time
 	Sleep          func(context.Context, time.Duration) error
@@ -384,6 +390,11 @@ func (s *Service) send(ctx context.Context, target string, body []byte, runID st
 	req.Header.Set("Content-Type", "application/cloudevents+json")
 	req.Header.Set("Idempotency-Key", runID)
 	req.GetBody = nil // Each recorded attempt owns exactly one transport send.
+	if s.Signer != nil {
+		if err := s.Signer.Sign(requestCtx, req, body); err != nil {
+			return Outcome{Code: "SIGNING_FAILED", Retry: true}
+		}
+	}
 	response, err := s.Client.Do(req)
 	if err != nil {
 		return Outcome{Code: "TRANSPORT_UNKNOWN", Retry: true}

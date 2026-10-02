@@ -43,6 +43,7 @@ Implemented commands:
 - `make configcheck`: validate the effective event configuration and print its revision.
 - `make check-docs`: validate repository documentation links.
 - `make check-contract`: verify supplied OpenAPI JSON/YAML equivalence (Ruby standard library).
+- `make check-infra`: Terraform `fmt -check`, `validate`, and mocked `terraform test` for `infra/bootstrap` and `infra/service`; pass `TERRAFORM=` when the pinned 1.16.4 binary is not on `PATH`. Needs network for the provider, no AWS credentials.
 - `make check`: run all implemented deterministic gates.
 
 Add configuration/Terraform/live-test commands as their implementations land and update this file in the same PR. A documented command must perform its advertised checks; never use success-returning placeholders. Local deterministic checks require no AWS credentials. Real AWS integration and production smoke tests run through the documented GitHub workflows using configured inputs.

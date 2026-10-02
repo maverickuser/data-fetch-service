@@ -112,6 +112,7 @@ func Start(ctx context.Context, kind string, d Dependencies) error {
 			return fmt.Errorf("artifact bucket required for delivery or reconciler")
 		}
 		worker := deliveryWorker(store, coordinator, s3.NewFromConfig(awsCfg), artifactBucket)
+		worker.Signer = &delivery.SigV4Signer{Credentials: awsCfg.Credentials, Region: awsCfg.Region, Now: time.Now}
 		if kind == "delivery" {
 			d.Start((&delivery.Ingress{Runner: worker, Store: store, NewToken: newID, Telemetry: recorder}).Handle)
 		} else {

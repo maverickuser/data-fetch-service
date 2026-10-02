@@ -15,7 +15,8 @@ Branch: `stack/10-infrastructure`. No remote PR or AWS resources created. Founda
 | 09a Full rerun | Implemented locally; independent committed-head review approved under `.reports/` |
 | 09b Delivery retry | Implemented locally; independent committed-head review approved under `.reports/` |
 | 09c API contracts and telemetry | Implemented locally; independent exact-head review approved under `.reports/` |
-| 10–12 | Planned; not implemented |
+| 10 Terraform runtime infrastructure | Implemented locally; not applied; independent review pending |
+| 11–12 | Planned; not implemented |
 
 Verified locally: gofmt/vet/staticcheck/errcheck; race/unit coverage greater than 95%; weighted-coverage regression checks; native and Linux/arm64 builds; configuration validation; documentation links; OpenAPI JSON/YAML parity. Current reports are in `.reports/`. CI YAML is prepared but has not run on GitHub.
 
@@ -41,4 +42,6 @@ PR 09b adds `POST /v1/runs/{run_id}/delivery-retries` for delivery-stage failure
 
 PR 09c adds bounded JSON/CloudWatch Embedded Metric Format outcome records at all five Lambda adapters. Root snapshots carry a correlation ID through linked and automatic child runs, and adapters resolve that identity for logs within a short telemetry-only deadline. Mocked API tests cover success and failure cases for every route, plus HTTP-to-Pull-to-processor delivery, completed-run reads, and linked-run log correlation. `make check` passes 3246/3414 unit statements (95.08%) and all existing deterministic gates. See [the local PR description](api-telemetry-pr.md). Independent committed-head review approved `6aea1ce`; evidence is under `.reports/pr09c-review.json`.
 
-Next: PR 10 Terraform runtime infrastructure, then release verification and deployment work. Live AWS/source tests are deferred until release.
+PR 10 adds the Terraform backend bootstrap and production runtime modules, SigV4 signing of processor submissions, and `make check-infra`. `make check` passes 3257/3425 unit statements (95.09%) plus Terraform `fmt`/`validate` and three mocked `terraform test` runs. No trusted plan has run and nothing is applied. State-derived failed-run and expired-ownership alarms are not provisioned because the handlers do not emit those metrics. See [the local PR description](infrastructure-pr.md).
+
+Next: PR 11 release verification harness, then PR 12 release pipeline. Live AWS/source tests are deferred until release.
