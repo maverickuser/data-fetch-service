@@ -14,6 +14,7 @@ import (
 type Snapshot struct {
 	SchemaVersion       int                  `json:"schema_version"`
 	RunID               string               `json:"run_id"`
+	CorrelationID       string               `json:"correlation_id"`
 	RequestKey          string               `json:"request_key"`
 	ExecutionKey        string               `json:"execution_key"`
 	PayloadHash         string               `json:"payload_hash"`
@@ -54,6 +55,9 @@ func CloneForDeliveryRetry(parent Snapshot, runID, requestID string, current *co
 	}
 	child := parent
 	child.RunID = runID
+	if child.CorrelationID == "" {
+		child.CorrelationID = parent.RunID
+	}
 	child.ParentRunID = parent.RunID
 	child.RetryRootRunID = ""
 	child.ExecutionRetryIndex = 0
@@ -97,6 +101,9 @@ func CloneForFullRerun(parent Snapshot, runID, requestID string, force bool) ([]
 	}
 	child := parent
 	child.RunID = runID
+	if child.CorrelationID == "" {
+		child.CorrelationID = parent.RunID
+	}
 	child.ParentRunID = parent.RunID
 	child.RetryRootRunID = ""
 	child.ExecutionRetryIndex = 0
@@ -163,7 +170,7 @@ func BuildSnapshot(cfg config.Config, event Normalized, runID string) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(Snapshot{SchemaVersion: 1, RunID: runID, RequestKey: key, ExecutionKey: execution, PayloadHash: payloadHash, ConfigRevision: cfg.Revision(), Event: event, Inputs: inputs, Jobs: jobs, Config: cfg, Force: event.Force})
+	return json.Marshal(Snapshot{SchemaVersion: 1, RunID: runID, CorrelationID: runID, RequestKey: key, ExecutionKey: execution, PayloadHash: payloadHash, ConfigRevision: cfg.Revision(), Event: event, Inputs: inputs, Jobs: jobs, Config: cfg, Force: event.Force})
 }
 
 // digest hashes canonical JSON with stable map ordering.

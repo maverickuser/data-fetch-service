@@ -10,13 +10,45 @@ import (
 	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/maverickuser/data-fetch-service/internal/telemetry"
 )
 
 // Lambda converts API Gateway HTTP API events into the same tested HTTP routes.
-type Lambda struct{ Handler http.Handler }
+type Lambda struct {
+	Handler   http.Handler
+	Telemetry telemetry.Recorder
+}
 
 // Handle preserves encoded paths/query values and returns JSON responses to API Gateway.
 func (l Lambda) Handle(ctx context.Context, event events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+	response, err := l.handle(ctx, event)
+	if l.Telemetry != nil {
+		outcome := "completed"
+		code := ""
+		if response.StatusCode >= 500 || err != nil {
+			outcome, code = "retry", "SERVER_ERROR"
+		} else if response.StatusCode >= 400 {
+			outcome, code = "rejected", "CLIENT_ERROR"
+		}
+		var result struct {
+			RunID string `json:"run_id"`
+		}
+		if response.StatusCode < 400 {
+			_ = json.Unmarshal([]byte(response.Body), &result)
+		}
+		if result.RunID == "" {
+			parts := strings.Split(event.RawPath, "/")
+			if len(parts) >= 4 && parts[1] == "v1" && parts[2] == "runs" {
+				result.RunID = parts[3]
+			}
+		}
+		l.Telemetry.Record(telemetry.Entry{Component: "api", Operation: "request", Outcome: outcome, RunID: result.RunID, RequestID: event.RequestContext.RequestID, ErrorCode: code})
+	}
+	return response, err
+}
+
+// handle preserves the existing API Gateway conversion and bounded response contract.
+func (l Lambda) handle(ctx context.Context, event events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
 	body := event.Body
 	if len(body) > 128<<10 {
 		return gatewayError(413), nil

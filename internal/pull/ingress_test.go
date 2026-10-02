@@ -1,13 +1,16 @@
 package pull
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	lambdaevents "github.com/aws/aws-lambda-go/events"
 	"github.com/maverickuser/data-fetch-service/internal/state"
+	"github.com/maverickuser/data-fetch-service/internal/telemetry"
 )
 
 type runnerFunc func(context.Context, string, string, time.Time) error
@@ -35,7 +38,8 @@ func TestPullIngressPartialBatchAndPermanentRejection(t *testing.T) {
 		}
 		return nil
 	})
-	ingress := Ingress{Runner: runner, Store: store, NewToken: func() string { return "token" }}
+	var logs bytes.Buffer
+	ingress := Ingress{Runner: runner, Store: store, NewToken: func() string { return "token" }, Telemetry: &telemetry.JSON{Output: &logs}}
 	ctx, cancel := context.WithDeadline(context.Background(), now.Add(time.Minute))
 	defer cancel()
 	batch := lambdaevents.SQSEvent{Records: []lambdaevents.SQSMessage{{MessageId: "a", Body: `{"run_id":"run"}`}, {MessageId: "b", Body: `{"run_id":"retry"}`}, {MessageId: "c", Body: `{"run_id":"stale"}`}, {MessageId: "d", Body: `{`}, {MessageId: "e", Body: `{"run_id":"../bad"}`}, {MessageId: "f", Body: `{"run_id":"cas-conflict"}`}}}
@@ -51,6 +55,11 @@ func TestPullIngressPartialBatchAndPermanentRejection(t *testing.T) {
 	}
 	if rejected != 2 {
 		t.Fatal("missing durable rejection receipts", rejected)
+	}
+	for _, outcome := range []string{`"outcome":"completed"`, `"outcome":"retry"`, `"outcome":"stale"`, `"outcome":"rejected"`} {
+		if !strings.Contains(logs.String(), outcome) {
+			t.Fatal(outcome, logs.String())
+		}
 	}
 }
 

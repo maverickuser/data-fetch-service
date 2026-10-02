@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"sort"
@@ -21,6 +22,7 @@ import (
 	"github.com/maverickuser/data-fetch-service/internal/acquisition"
 	"github.com/maverickuser/data-fetch-service/internal/admission"
 	"github.com/maverickuser/data-fetch-service/internal/config"
+	"github.com/maverickuser/data-fetch-service/internal/delivery"
 	"github.com/maverickuser/data-fetch-service/internal/domain"
 	"github.com/maverickuser/data-fetch-service/internal/events"
 	"github.com/maverickuser/data-fetch-service/internal/pull"
@@ -41,6 +43,12 @@ func (a invalidUpload) Upload(context.Context, string, io.Reader) (acquisition.A
 }
 
 type integrationFetch func(context.Context, string, config.ResolvedJob) (acquisition.Result, error)
+
+type processorTransport func(*http.Request) (*http.Response, error)
+
+func (f processorTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
 
 func (f integrationFetch) Fetch(ctx context.Context, run string, job config.ResolvedJob) (acquisition.Result, error) {
 	return f(ctx, run, job)
@@ -143,7 +151,7 @@ func TestHTTPCompositionDeliveryRetryReusesRetainedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	var pinned events.Snapshot
-	if json.Unmarshal(child.Snapshot, &pinned) != nil || pinned.DeliveryRetry == nil || pinned.DeliveryRetry.OldProcessorURL != parent.Config.Processor.URL || pinned.DeliveryRetry.NewProcessorURL != service.Config.Processor.URL {
+	if json.Unmarshal(child.Snapshot, &pinned) != nil || pinned.CorrelationID != parent.CorrelationID || pinned.DeliveryRetry == nil || pinned.DeliveryRetry.OldProcessorURL != parent.Config.Processor.URL || pinned.DeliveryRetry.NewProcessorURL != service.Config.Processor.URL {
 		t.Fatal(pinned)
 	}
 	if got := call(h, "POST", "/v1/runs/root/delivery-retries", `{"use_current_processor_config":true}`); got.Code != 202 || !strings.Contains(got.Body.String(), `"reused":true`) {
@@ -170,6 +178,59 @@ func TestHTTPCompositionDeliveryRetryReusesRetainedFiles(t *testing.T) {
 	var reused pull.Manifest
 	if json.Unmarshal(artifacts.data["runs/child/manifest.json"], &reused) != nil || reused.Data.Files[0].Key != "runs/root/raw/"+parent.Jobs[0].ID+"/"+parent.Jobs[0].Filename {
 		t.Fatal(reused)
+	}
+}
+
+func TestHTTPCompositionDeliveryRetryCompletesThroughProcessor(t *testing.T) {
+	h, admissionService, objects, queue, artifacts, _ := retryComposition(t)
+	admissionService.Config.Processor.Enabled = true
+	admissionService.Config.Processor.URL = "https://processor.internal/v1/event-ingestions"
+	if response := call(h, "POST", "/v1/runs/root/delivery-retries", `{"use_current_processor_config":true}`); response.Code != 202 {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	if response := call(h, "GET", "/v1/runs/child", ""); response.Code != 200 {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	coord := admissionService.Coordinator.(*state.Coordinator)
+	worker := &pull.Service{Repository: state.New(objects), Coordinator: coord, Fetcher: integrationFetch(func(context.Context, string, config.ResolvedJob) (acquisition.Result, error) {
+		t.Fatal("delivery retry fetched source")
+		return acquisition.Result{}, nil
+	}), ManifestStorage: artifacts, ArtifactReader: artifacts, Publisher: queue, ArtifactBucket: "artifacts", Now: admissionService.Now}
+	if err := worker.Run(context.Background(), "child", "pull-child", admissionService.Now().Add(15*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	processorCalls := 0
+	processor := &delivery.Service{Repository: state.New(objects), Manifests: artifacts, Coordinator: coord, ArtifactBucket: "artifacts", Now: admissionService.Now}
+	processor.Client = &http.Client{Transport: processorTransport(func(request *http.Request) (*http.Response, error) {
+		processorCalls++
+		if request.Method != http.MethodPost || request.URL.String() != admissionService.Config.Processor.URL || request.Header.Get("Idempotency-Key") != "child" {
+			t.Errorf("unexpected processor request: %s %s", request.Method, request.URL)
+		}
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			return nil, err
+		}
+		if !strings.Contains(string(body), `"key":"runs/child/manifest.json"`) || strings.Contains(string(body), `"files"`) {
+			t.Errorf("processor received incomplete manifest reference: %s", body)
+		}
+		response := httptest.NewRecorder()
+		response.Header().Set("Content-Type", "application/json")
+		response.Header().Set("Location", "https://processor.internal/v1/processing-jobs/job-child")
+		response.WriteHeader(http.StatusAccepted)
+		_, _ = response.WriteString(`{"jobId":"job-child","status":"ACCEPTED","eventId":"urn:bond-platform:submission:child","runId":"child","createdAt":"2026-10-01T01:00:00Z","statusUrl":"https://processor.internal/v1/processing-jobs/job-child"}`)
+		return response.Result(), nil
+	})}
+	if err := processor.Run(context.Background(), "child", "delivery-child", admissionService.Now().Add(15*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if processorCalls != 1 {
+		t.Fatal(processorCalls)
+	}
+	for _, path := range []string{"/v1/runs/child", "/v1/runs/child/history", "/v1/runs/child/delivery"} {
+		response := call(h, "GET", path, "")
+		if response.Code != 200 || !strings.Contains(response.Body.String(), "completed") && path == "/v1/runs/child" {
+			t.Fatal(path, response.Code, response.Body.String())
+		}
 	}
 }
 
@@ -736,6 +797,64 @@ func TestHTTPCompositionTimeoutRecoveryReadsAndPagination(t *testing.T) {
 	}
 	if result := call(h, "POST", "/v1/events/daily-bhavcopy/runs", body); result.Code != 200 {
 		t.Fatal(result.Code, result.Body.String())
+	}
+}
+
+func TestHTTPCompositionRouteSuccessAndFailureMatrix(t *testing.T) {
+	now := time.Date(2026, 9, 21, 14, 30, 0, 0, time.UTC)
+	objects := &integrationObjects{objects: map[string]state.Object{}, now: now}
+	h, service := integrationHandler(t, objects, &integrationQueue{}, now, "run-routes")
+	h.DeliveryRecovery = service
+	artifacts := &retryArtifacts{data: map[string][]byte{}}
+	service.Artifacts = artifacts
+	service.ManifestStorage = artifacts
+	service.Records = state.New(objects)
+	service.ArtifactBucket = "artifacts"
+	request := httptest.NewRequest(http.MethodPost, "/v1/events/daily-bhavcopy/runs", strings.NewReader(`{"inputs":{"exchangeName":"BSE"}}`))
+	request.Header.Set("Idempotency-Key", "route-matrix")
+	response := httptest.NewRecorder()
+	h.Routes().ServeHTTP(response, request)
+	if response.Code != 202 {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	success := []string{
+		"/v1/events/daily-bhavcopy",
+		"/v1/events/daily-bhavcopy/active?inputs=" + url.QueryEscape(`{"exchangeName":"BSE"}`),
+		"/v1/events/daily-bhavcopy/runs",
+		"/v1/runs/run-routes",
+		"/v1/runs/run-routes/history",
+		"/v1/runs/run-routes/pulls",
+		"/v1/runs/run-routes/delivery",
+		"/v1/requests/urn%3Abond-platform%3Amanual/route-matrix",
+	}
+	for _, path := range success {
+		if got := call(h, http.MethodGet, path, ""); got.Code != 200 {
+			t.Fatal(path, got.Code, got.Body.String())
+		}
+	}
+	failures := []struct {
+		method string
+		path   string
+		body   string
+		status int
+	}{
+		{http.MethodGet, "/v1/events/unknown", "", 404},
+		{http.MethodGet, "/v1/events/daily-bhavcopy/active?inputs=bad", "", 400},
+		{http.MethodGet, "/v1/events/daily-bhavcopy/runs?limit=bad", "", 400},
+		{http.MethodGet, "/v1/runs/missing", "", 404},
+		{http.MethodGet, "/v1/runs/missing/history", "", 404},
+		{http.MethodGet, "/v1/runs/missing/pulls", "", 404},
+		{http.MethodGet, "/v1/runs/missing/delivery", "", 404},
+		{http.MethodGet, "/v1/requests/urn%3Abond-platform%3Amanual/missing", "", 404},
+		{http.MethodPost, "/v1/events/daily-bhavcopy/runs", `{}`, 400},
+		{http.MethodPost, "/v1/runs/run-routes/reruns", `{}`, 409},
+		{http.MethodPost, "/v1/runs/run-routes/delivery-retries", `{}`, 409},
+	}
+	for _, failure := range failures {
+		got := call(h, failure.method, failure.path, failure.body)
+		if got.Code != failure.status {
+			t.Fatal(failure.path, got.Code, got.Body.String())
+		}
 	}
 }
 

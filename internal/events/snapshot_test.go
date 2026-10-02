@@ -40,6 +40,9 @@ func TestScheduledGoldenAndRetryAfterMidnight(t *testing.T) {
 	}
 	c := eventConfig(t)
 	snapshot := readSnapshot(t, c, event)
+	if snapshot.CorrelationID != "run-1" {
+		t.Fatal("root correlation missing", snapshot.CorrelationID)
+	}
 	expected, err := os.ReadFile("testdata/bse-job.json")
 	if err != nil {
 		t.Fatal(err)

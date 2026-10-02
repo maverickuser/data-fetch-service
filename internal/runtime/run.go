@@ -27,6 +27,7 @@ import (
 	"github.com/maverickuser/data-fetch-service/internal/recovery"
 	"github.com/maverickuser/data-fetch-service/internal/state"
 	"github.com/maverickuser/data-fetch-service/internal/storage"
+	"github.com/maverickuser/data-fetch-service/internal/telemetry"
 )
 
 // Dependencies makes cold-start assembly testable without credentials or a Lambda loop.
@@ -89,6 +90,7 @@ func Start(ctx context.Context, kind string, d Dependencies) error {
 		return err
 	}
 	store := state.New(objects)
+	recorder := &telemetry.JSON{Output: os.Stdout, Now: time.Now}
 	coordinator := state.NewCoordinator(store, time.Now)
 	publisher := &queue.Publisher{Client: sqs.NewFromConfig(awsCfg), URLs: map[string]string{"pull": pullQueueURL, "delivery": deliveryQueueURL}}
 	service := &admission.Service{Config: cfg, Coordinator: coordinator, Publisher: publisher, Now: time.Now, NewID: newID}
@@ -103,7 +105,7 @@ func Start(ctx context.Context, kind string, d Dependencies) error {
 		worker := &pull.Service{Repository: store, Coordinator: coordinator, ManifestStorage: fetcher.Storage, ArtifactReader: &storage.Reader{Client: artifactClient, Bucket: artifactBucket, MaxBytes: 2 << 20}, Publisher: publisher, ArtifactBucket: artifactBucket, Now: time.Now, FetcherForSnapshot: func(defaults config.Defaults) pull.Fetcher {
 			return pinnedPullFetcher(fetcher, artifactClient, artifactBucket, defaults)
 		}}
-		d.Start((&pull.Ingress{Runner: worker, Store: store, NewToken: newID}).Handle)
+		d.Start((&pull.Ingress{Runner: worker, Store: store, NewToken: newID, Telemetry: recorder}).Handle)
 	} else if kind == "delivery" || kind == "reconciler" {
 		artifactBucket := d.Env("ARTIFACT_BUCKET")
 		if artifactBucket == "" {
@@ -111,13 +113,13 @@ func Start(ctx context.Context, kind string, d Dependencies) error {
 		}
 		worker := deliveryWorker(store, coordinator, s3.NewFromConfig(awsCfg), artifactBucket)
 		if kind == "delivery" {
-			d.Start((&delivery.Ingress{Runner: worker, Store: store, NewToken: newID}).Handle)
+			d.Start((&delivery.Ingress{Runner: worker, Store: store, NewToken: newID, Telemetry: recorder}).Handle)
 		} else {
 			reconciler := &recovery.Service{Repository: store, Coordinator: coordinator, Publisher: publisher, Delivery: worker, Now: time.Now, NewID: newID, PageLimit: 100}
-			d.Start((&recovery.Handler{Service: reconciler}).Handle)
+			d.Start((&recovery.Handler{Service: reconciler, Telemetry: recorder}).Handle)
 		}
 	} else if kind == "admission" {
-		handler := &admission.Ingress{Service: service, Store: store, Mappings: mappings}
+		handler := &admission.Ingress{Service: service, Store: store, Mappings: mappings, Telemetry: recorder}
 		d.Start(handler.Handle)
 	} else {
 		artifactBucket := d.Env("ARTIFACT_BUCKET")
@@ -130,7 +132,7 @@ func Start(ctx context.Context, kind string, d Dependencies) error {
 		service.ArtifactBucket = artifactBucket
 		service.Records = store
 		handler := &api.Handler{Service: service, Recovery: service, DeliveryRecovery: service, Store: store, Coordinator: coordinator, Config: cfg, Now: time.Now}
-		adapter := api.Lambda{Handler: handler.Routes()}
+		adapter := api.Lambda{Handler: handler.Routes(), Telemetry: recorder}
 		d.Start(adapter.Handle)
 	}
 	return nil

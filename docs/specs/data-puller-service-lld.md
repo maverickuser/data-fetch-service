@@ -911,6 +911,8 @@ Terraform provisions:
 - CloudWatch log groups with 30-day retention and metrics for failed runs, pending delivery age, expired ownership, and DLQ depth.
 - Processor read-role permissions or an explicit cross-account bucket-policy integration input.
 
+Each Lambda adapter emits one JSON/CloudWatch Embedded Metric Format outcome per handled request, message, or reconciliation page. The fixed fields are component, operation, outcome, optional durable run/request key, transport request ID, correlation ID, and a bounded error code. The root admitted snapshot sets `correlation_id` to its run ID; linked and automatic child snapshots preserve that root identity. Metric dimensions use only component, operation, and outcome. Do not log raw events, URLs, credentials, source/processor bodies, or exception text. Emission failures do not change SQS acknowledgement or API results. PR 10 combines these operation counts with state-derived failed-run, pending-delivery, and expired-ownership alarms and native SQS DLQ/age metrics.
+
 Run Lambdas inside the configured VPC private subnets. Public BSE/NSDL sources are reached through the NAT egress path; S3, SQS, and CloudWatch Logs use VPC endpoints. Delivery to the structured-file processor uses private connectivity in the same VPC. Artifact buckets remain private regardless of API authentication choice. The configured processor must be reachable from the VPC before enabling real handoff.
 
 GitHub Actions workflow:

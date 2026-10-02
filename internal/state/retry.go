@@ -95,6 +95,9 @@ func (c *Coordinator) ReservePullRetry(ctx context.Context, key, childID string)
 	}
 	child := parent
 	child.RunID = childID
+	if child.CorrelationID == "" {
+		child.CorrelationID = root
+	}
 	child.ParentRunID = parent.RunID
 	child.RetryRootRunID = root
 	child.ExecutionRetryIndex = parent.ExecutionRetryIndex + 1

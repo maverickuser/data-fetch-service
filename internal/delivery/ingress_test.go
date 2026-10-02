@@ -1,14 +1,17 @@
 package delivery
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	lambdaevents "github.com/aws/aws-lambda-go/events"
+	"github.com/maverickuser/data-fetch-service/internal/telemetry"
 )
 
 type runnerFunc func(context.Context, string, string, time.Time) error
@@ -21,8 +24,9 @@ func TestIngressPartialBatchAndRejectEvidence(t *testing.T) {
 	ctx, cancel := context.WithDeadline(context.Background(), fixedTime.Add(24*time.Hour))
 	defer cancel()
 	repo := &memoryRepository{objects: map[string][]byte{}}
+	var logs bytes.Buffer
 	calls := 0
-	ingress := Ingress{Store: repo, NewToken: func() string { return "token" }, Runner: runnerFunc(func(_ context.Context, run, token string, deadline time.Time) error {
+	ingress := Ingress{Store: repo, Telemetry: &telemetry.JSON{Output: &logs}, NewToken: func() string { return "token" }, Runner: runnerFunc(func(_ context.Context, run, token string, deadline time.Time) error {
 		calls++
 		if run != "run_1" || token != "token" || deadline.IsZero() {
 			t.Fatal(run, token, deadline)
@@ -36,6 +40,11 @@ func TestIngressPartialBatchAndRejectEvidence(t *testing.T) {
 	response, err := ingress.Handle(ctx, batch)
 	if err != nil || calls != 2 || len(response.BatchItemFailures) != 1 || response.BatchItemFailures[0].ItemIdentifier != "a" || len(repo.objects) != 1 {
 		t.Fatal(response, err, calls, repo.objects)
+	}
+	for _, outcome := range []string{`"outcome":"retry"`, `"outcome":"stale"`, `"outcome":"rejected"`} {
+		if !strings.Contains(logs.String(), outcome) {
+			t.Fatal(outcome, logs.String())
+		}
 	}
 	digest := sha256.Sum256([]byte("arn:test\x00c\x00bad"))
 	repo.createError = "requests/rejected-delivery-" + hex.EncodeToString(digest[:]) + "/rejection.json"
