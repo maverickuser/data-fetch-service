@@ -156,6 +156,21 @@ override_resource {
   values = { arn = "arn:aws:s3:::data-fetch-service-state" }
 }
 
+override_resource {
+  target = aws_sqs_queue.work["ingress"]
+  values = { arn = "arn:aws:sqs:ap-south-1:123456789012:data-fetch-service-ingress" }
+}
+
+override_resource {
+  target = aws_sqs_queue.work["pull"]
+  values = { arn = "arn:aws:sqs:ap-south-1:123456789012:data-fetch-service-pull" }
+}
+
+override_resource {
+  target = aws_sqs_queue.work["delivery"]
+  values = { arn = "arn:aws:sqs:ap-south-1:123456789012:data-fetch-service-delivery" }
+}
+
 run "production_shape" {
   command = apply
 
@@ -200,7 +215,29 @@ run "production_shape" {
     error_message = "Artifact access must match each handler's use; Admission has none."
   }
   assert {
-    condition     = output.ingress_queue_arn == aws_sqs_queue.work["ingress"].arn && output.api_url == "https://fetch.kagent.app"
+    condition = { for kind in ["api", "admission", "pull", "delivery", "reconciler"] : kind => toset(flatten([for statement in jsondecode(aws_iam_role_policy.lambda[kind].policy).Statement : statement.Resource if statement.Sid == "PublishInternalWork"])) } == {
+      api        = toset(["arn:aws:sqs:ap-south-1:123456789012:data-fetch-service-pull", "arn:aws:sqs:ap-south-1:123456789012:data-fetch-service-delivery"])
+      admission  = toset(["arn:aws:sqs:ap-south-1:123456789012:data-fetch-service-pull", "arn:aws:sqs:ap-south-1:123456789012:data-fetch-service-delivery"])
+      pull       = toset(["arn:aws:sqs:ap-south-1:123456789012:data-fetch-service-delivery"])
+      delivery   = toset([])
+      reconciler = toset(["arn:aws:sqs:ap-south-1:123456789012:data-fetch-service-pull", "arn:aws:sqs:ap-south-1:123456789012:data-fetch-service-delivery"])
+    }
+    error_message = "Each role may publish only to the internal queues its dispatch repair can target."
+  }
+  assert {
+    condition = { for kind in ["admission", "pull", "delivery"] : kind => one([for statement in jsondecode(aws_iam_role_policy.lambda[kind].policy).Statement : statement.Resource if statement.Sid == "ConsumeOwnQueue"]) } == {
+      admission = "arn:aws:sqs:ap-south-1:123456789012:data-fetch-service-ingress"
+      pull      = "arn:aws:sqs:ap-south-1:123456789012:data-fetch-service-pull"
+      delivery  = "arn:aws:sqs:ap-south-1:123456789012:data-fetch-service-delivery"
+    }
+    error_message = "Each consumer may read only its own queue."
+  }
+  assert {
+    condition     = alltrue([for kind in ["api", "admission", "pull", "delivery", "reconciler"] : alltrue([for statement in jsondecode(aws_iam_role_policy.lambda[kind].policy).Statement : !can(statement.Condition) if statement.Action == "s3:ListBucket"])])
+    error_message = "ListBucket must be unconditioned so missing keys return 404 rather than 403."
+  }
+  assert {
+    condition     = output.ingress_queue_arn == "arn:aws:sqs:ap-south-1:123456789012:data-fetch-service-ingress" && output.ingress_queue_arn == aws_sqs_queue.work["ingress"].arn && output.api_url == "https://fetch.kagent.app"
     error_message = "Producer and API outputs must keep their agreed names and values."
   }
   assert {

@@ -13,8 +13,9 @@ locals {
     delivery  = "delivery"
   }
   queue_publishers = {
-    api        = [aws_sqs_queue.work["pull"].arn]
-    admission  = [aws_sqs_queue.work["pull"].arn]
+    # Admission and API repair pending dispatches for joined runs, which may target either queue.
+    api        = [aws_sqs_queue.work["pull"].arn, aws_sqs_queue.work["delivery"].arn]
+    admission  = [aws_sqs_queue.work["pull"].arn, aws_sqs_queue.work["delivery"].arn]
     pull       = [aws_sqs_queue.work["delivery"].arn]
     delivery   = []
     reconciler = [aws_sqs_queue.work["pull"].arn, aws_sqs_queue.work["delivery"].arn]
@@ -51,7 +52,7 @@ resource "aws_iam_role_policy" "lambda" {
       [{
         Sid      = "OwnLogs"
         Effect   = "Allow"
-        Action   = ["logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogStreams"]
+        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
         Resource = ["${aws_cloudwatch_log_group.lambda[each.key].arn}:*"]
         }, {
         Sid      = "VpcNetworkInterfaces"
@@ -64,13 +65,11 @@ resource "aws_iam_role_policy" "lambda" {
         Action   = ["s3:GetObject", "s3:PutObject"]
         Resource = local.state_objects
         }, {
-        Sid      = "StatePrefixListing"
+        # Unconditioned so S3 reports a missing key as 404; GetObject carries no s3:prefix key.
+        Sid      = "StateListing"
         Effect   = "Allow"
         Action   = "s3:ListBucket"
         Resource = local.state_arn
-        Condition = {
-          StringLike = { "s3:prefix" = [for prefix in local.state_prefixes : "${prefix}/*"] }
-        }
       }],
       [for kind in [each.key] : {
         Sid      = "ReadRunArtifacts"
@@ -83,20 +82,17 @@ resource "aws_iam_role_policy" "lambda" {
         Effect   = "Allow"
         Action   = "s3:ListBucket"
         Resource = local.artifact_arn
-        Condition = {
-          StringLike = { "s3:prefix" = ["runs/*"] }
-        }
       } if contains(local.artifact_readers, kind)],
       [for kind in [each.key] : {
         Sid      = "WriteRunArtifacts"
         Effect   = "Allow"
-        Action   = ["s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]
+        Action   = ["s3:PutObject", "s3:AbortMultipartUpload"]
         Resource = local.artifact_objects
       } if contains(local.artifact_writers, kind)],
       [for kind in [each.key] : {
         Sid      = "ConsumeOwnQueue"
         Effect   = "Allow"
-        Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes"]
+        Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
         Resource = aws_sqs_queue.work[local.queue_consumers[each.key]].arn
       } if contains(keys(local.queue_consumers), kind)],
       [for kind in [each.key] : {

@@ -15,10 +15,10 @@ Branch: `stack/10-infrastructure`. No remote PR or AWS resources created. Founda
 | 09a Full rerun | Implemented locally; independent committed-head review approved under `.reports/` |
 | 09b Delivery retry | Implemented locally; independent committed-head review approved under `.reports/` |
 | 09c API contracts and telemetry | Implemented locally; independent exact-head review approved under `.reports/` |
-| 10 Terraform runtime infrastructure | Implemented locally; not applied; independent review pending |
+| 10 Terraform runtime infrastructure | Implemented locally; not applied; reviewer-agent findings on `bb3c88d` fixed; re-review of the fixed head pending |
 | 11–12 | Planned; not implemented |
 
-Verified locally: gofmt/vet/staticcheck/errcheck; race/unit coverage greater than 95%; weighted-coverage regression checks; native and Linux/arm64 builds; configuration validation; documentation links; OpenAPI JSON/YAML parity. Current reports are in `.reports/`. CI YAML is prepared but has not run on GitHub.
+Verified locally: gofmt/vet/staticcheck/errcheck; race/unit coverage greater than 95%; weighted-coverage regression checks; native and Linux/arm64 builds; configuration validation; documentation links; OpenAPI JSON/YAML parity. Current reports are in `.reports/`. CI (`.github/workflows/quality.yml`) is defined for pull requests and pushes to `main` and `stack/**` as separate jobs: Compile, then Unit tests and coverage, then Mocked integration tests, with lint/docs/contract and Terraform checks alongside. It has no deployment job and has not run on GitHub.
 
 PR 02 includes strict YAML overlays, pinned configuration revisions, safe template resolution, CloudEvents/SQS/native EventBridge normalization, resolved immutable JSON snapshots, and request/execution identities. Production BSE and six NSDL jobs are configured. PR 04 loads approved native mappings from `config/native-events.yaml`; its empty default enables no native producers. Full AWS schedule-expression validation belongs to Terraform in PR 10. The disabled processor target is an explicit placeholder until the endpoint is provided.
 

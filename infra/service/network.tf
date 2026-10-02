@@ -24,10 +24,6 @@ locals {
   nat_gateways         = local.network.nat_gateway_ids_by_az
 }
 
-data "aws_vpc" "shared" {
-  id = local.network.vpc_id
-}
-
 data "aws_subnet" "private" {
   for_each = local.private_subnets
   id       = each.value

@@ -7,7 +7,7 @@ Two Terraform root modules, both pinned to Terraform `~> 1.16.4` and AWS provide
 
 ## Local checks
 
-`make check-infra TERRAFORM=/path/to/terraform` runs `fmt -check`, `validate`, and the mocked `terraform test` suite for both modules. It needs network access to download the provider, but no AWS credentials. `tests/runtime.tftest.hcl` asserts queue visibility/retention/redrive, lifecycle prefixes, IAM scope per role, the schedule payload, staged activation defaults, output names, and the shared-VPC and processor-endpoint contracts.
+`make check-infra TERRAFORM=/path/to/terraform` runs `fmt -check` and `validate` for both modules and the mocked `terraform test` suite for `service/` (`bootstrap/` has no tests). It needs network access to download the provider, but no AWS credentials. `service/tests/runtime.tftest.hcl` asserts queue visibility/retention/redrive, lifecycle prefixes, per-role queue publish/consume scope, artifact access, processor-route access, the schedule payload, staged activation defaults, and output names. Its only failing-case runs are a processor in another VPC and a processor endpoint that differs from the bundled configuration; the subnet, NAT-route, and endpoint preconditions are not exercised by a test, and the S3 endpoint-policy check is a substring match evaluated at apply.
 
 ## Apply order
 

@@ -9,7 +9,7 @@ Processor change agreed 2026-10-02: the processor is reached through its IAM-pro
 Behaviour worth reviewing:
 
 - State lifecycle expires only `runs/`, `requests/`, and `listings/` after 30 days. `coordination/` and `acceptance/` are retained so the accepted fingerprint outlives its artifacts. Abandoned multipart uploads are removed after one day.
-- Every role can read and write the five state prefixes including `acceptance/`. Artifact read: API, Pull, Delivery, Reconciler. Artifact write: Pull and API (delivery-retry child manifests). Admission has no artifact access.
+- Every role can read and write the five state prefixes including `acceptance/`. Artifact read: API, Pull, Delivery, Reconciler. Artifact write: Pull and API (delivery-retry child manifests). Admission has no artifact access. API and Admission may publish to both internal queues because dispatch repair for a joined run can target either. `s3:ListBucket` is unconditioned so a missing key reads as 404, which admission and expiry handling depend on.
 - Lambda does not set the reserved `AWS_REGION` variable; the runtime supplies it.
 - Ingress consumption and the BSE schedule default to disabled for a staged first rollout.
 
@@ -17,6 +17,7 @@ Known gaps, not implemented here:
 
 - Alarms cover queue age, DLQ depth, handler retry outcomes, and Lambda invocation errors. The LLD's state-derived failed-run and expired-ownership metrics are not emitted by the Go handlers, so no alarm exists for them yet.
 - A failing `terraform test` assertion on an IAM policy crashes Terraform 1.16.4 while printing the diagnostic; the run still fails.
+- Alarms have no notification target, the Scheduler trust policy has no source-account condition, and noncurrent object versions persist for a further 30 days after expiry.
 - No trusted plan has run: it needs AWS access and the real network and processor states.
 
 Validation: `make check` passes, including race/unit coverage 3257/3425 statements (95.09%), mocked integration, lint, native and Linux/arm64 builds, configuration, documentation links, OpenAPI parity, and `check-infra` (`fmt -check`, `validate` on both modules, three mocked `terraform test` runs). No Terraform was applied and no AWS or live endpoint was called.

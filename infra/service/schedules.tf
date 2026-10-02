@@ -76,11 +76,3 @@ resource "aws_scheduler_schedule" "reconciler" {
 
   depends_on = [aws_iam_role_policy.scheduler]
 }
-
-resource "aws_lambda_permission" "scheduler_reconciler" {
-  statement_id  = "AllowSchedulerInvoke"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.handler["reconciler"].function_name
-  principal     = "scheduler.amazonaws.com"
-  source_arn    = aws_scheduler_schedule.reconciler.arn
-}

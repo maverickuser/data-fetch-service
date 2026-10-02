@@ -35,9 +35,9 @@ func TestSigV4SignerAuthorizesExactProcessorBody(t *testing.T) {
 	if !strings.Contains(authorization, "Credential=AKIDEXAMPLE/20261002/ap-south-1/execute-api/aws4_request") || request.Header.Get("X-Amz-Date") != "20261002T000000Z" || request.Header.Get("X-Amz-Security-Token") != "session" {
 		t.Fatal(request.Header)
 	}
-	changed, _ := http.NewRequest(http.MethodPost, request.URL.String(), strings.NewReader("changed"))
+	changed, _ := http.NewRequest(http.MethodPost, request.URL.String(), strings.NewReader("BODY"))
 	changed.Header.Set("Idempotency-Key", "run_1")
-	if err := signer.Sign(context.Background(), changed, []byte("changed")); err != nil || changed.Header.Get("Authorization") == authorization {
+	if err := signer.Sign(context.Background(), changed, []byte("BODY")); err != nil || changed.Header.Get("Authorization") == authorization {
 		t.Fatal("signature did not bind body", err)
 	}
 	for _, invalid := range []*SigV4Signer{nil, {}, {Credentials: signer.Credentials, Region: "", Now: signer.Now}, {Credentials: signer.Credentials, Region: "ap-south-1"}} {
