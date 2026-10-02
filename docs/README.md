@@ -11,6 +11,7 @@
 - [Recovery PR description](plans/recovery-pr.md): reconciler, linked Pull retries, and delivery resume.
 - [Full-rerun PR description](plans/full-rerun-pr.md): pinned manual rerun and API contract.
 - [Infrastructure guide](../infra/README.md) and [infrastructure PR description](plans/infrastructure-pr.md): Terraform modules, inputs, apply order, and known gaps.
+- [Live verification PR description](plans/live-verification-pr.md): smoke runner behaviour, inputs, and what remains open.
 - [Original fetch specification](specs/data-puller-service-spec.md): historical; LLD supersedes conflicts.
 - [Processor LLD](specs/structured-file-processing-lld.md) and [processor specification](specs/structured-file-processing-spec.md): external references. Processor LLD is preserved unchanged at user request; authoritative admission details are in OpenAPI.
 

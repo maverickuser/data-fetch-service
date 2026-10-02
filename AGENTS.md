@@ -25,7 +25,8 @@ Keep current instructions and user-approved changes reflected in the LLD. Do not
 - `internal/api`, `internal/telemetry`: REST adapters, logs, and metrics.
 - `config/events.yaml`, `config/environments/prod.yaml`: version-controlled effective configuration.
 - `infra/bootstrap`, `infra/service`: separate Terraform backend bootstrap and production runtime resources.
-- `.github/workflows`: checks, deployment, AWS integration, and smoke workflows.
+- `internal/smoke`, `cmd/smoke`: real-endpoint smoke runner, tested locally against a fake deployment.
+- `.github/workflows`: CI checks (`quality.yml`) and the manual smoke workflow (`smoke.yml`); deployment and AWS integration workflows are planned, not present.
 
 Only claim a package or feature exists after inspecting the checkout; this map describes the target architecture during incremental implementation.
 

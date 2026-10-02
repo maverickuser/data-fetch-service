@@ -1,6 +1,6 @@
 # Implementation status
 
-Branch: `stack/10-infrastructure`. No remote PR or AWS resources created. Foundation committed as `e4bbe13`; its separate agent review covered staged content, not the committed head. PR 02 is approved through `cd31c10`, PR 03 through `8763839`, PR 04 through `eefd677`, PR 05 through `0d8cd94`, PR 06 through `d94ba82`, PR 07 through `a786f0c7`, PR 08 through `5e8c708`, PR 09a through `78e2455`, PR 09b through `5c24e5e`, and PR 09c through `6aea1ce`; exact-head local review records are under `.reports/`.
+Increments 01–10 are merged to `main` (pull request #1). The smoke runner was merged into `stack/10-infrastructure` (pull request #2) and reaches `main` with its review fixes from `stack/11-review-fixes`; no AWS resources created. Foundation committed as `e4bbe13`; its separate agent review covered staged content, not the committed head. PR 02 is approved through `cd31c10`, PR 03 through `8763839`, PR 04 through `eefd677`, PR 05 through `0d8cd94`, PR 06 through `d94ba82`, PR 07 through `a786f0c7`, PR 08 through `5e8c708`, PR 09a through `78e2455`, PR 09b through `5c24e5e`, and PR 09c through `6aea1ce`; exact-head local review records are under `.reports/`.
 
 History note (2026-10-02): before the first push, the stack's commits were rewritten to remove a deployment role ARN from two documents; no code changed. Hashes cited in this file, in the PR descriptions, and in `.reports/` are the pre-rewrite hashes. Reviewed heads map as: `e4bbe13`→`8afc06c`, `cd31c10`→`68dc1cc`, `8763839`→`4c09853`, `eefd677`→`33ba3c8`, `0d8cd94`→`e3246a7`, `d94ba82`→`d60c3e3`, `a786f0c7`→`eaa1856`, `5e8c708`→`1aa8758`, `78e2455`→`98b0fee`, `5c24e5e`→`01eec01`, `6aea1ce`→`ac26473`, `bb3c88d`→`60fa9d3`.
 
@@ -18,7 +18,8 @@ History note (2026-10-02): before the first push, the stack's commits were rewri
 | 09b Delivery retry | Implemented locally; independent committed-head review approved under `.reports/` |
 | 09c API contracts and telemetry | Implemented locally; independent exact-head review approved under `.reports/` |
 | 10 Terraform runtime infrastructure | Implemented locally; not applied; reviewer-agent findings on `bb3c88d` fixed in `6de68d8`; re-review confirmed them resolved and raised one documentation correction, since applied |
-| 11–12 | Planned; not implemented |
+| 11 Release verification harness | Smoke runner and manual smoke workflow implemented locally; AWS integration and load workflows not implemented; reviewer-agent findings fixed, re-review not run |
+| 12 | Planned; not implemented |
 
 Verified locally: gofmt/vet/staticcheck/errcheck; race/unit coverage greater than 95%; weighted-coverage regression checks; native and Linux/arm64 builds; configuration validation; documentation links; OpenAPI JSON/YAML parity. Current reports are in `.reports/`. CI (`.github/workflows/quality.yml`) is defined for pull requests and pushes to `main` and `stack/**` as separate jobs: Compile, then Unit tests and coverage, then Mocked integration tests, with lint/docs/contract and Terraform checks alongside. It has no deployment job. All five jobs passed on GitHub for the stack head in pull request #1.
 
@@ -46,4 +47,6 @@ PR 09c adds bounded JSON/CloudWatch Embedded Metric Format outcome records at al
 
 PR 10 adds the Terraform backend bootstrap and production runtime modules, SigV4 signing of processor submissions, and `make check-infra`. `make check` passes 3257/3425 unit statements (95.09%) plus Terraform `fmt`/`validate` and three mocked `terraform test` runs. No trusted plan has run and nothing is applied. State-derived failed-run and expired-ownership alarms are not provisioned because the handlers do not emit those metrics. See [the local PR description](infrastructure-pr.md).
 
-Next: PR 11 release verification harness, then PR 12 release pipeline. Live AWS/source tests are deferred until release.
+PR 11 (partial) adds the real-endpoint smoke runner, tested only against a local fake deployment, and a `workflow_dispatch` smoke workflow that has never been run. A source HTTP 404 is now recorded as `SOURCE_NOT_FOUND`. `make check` passes 3557/3730 unit statements (95.36%) after the review fixes. See [the local PR description](live-verification-pr.md).
+
+Next: the remaining PR 11 items (disposable-resource AWS integration workflow, load/resource workflow), then PR 12 release pipeline. Live AWS/source tests are deferred until release.
