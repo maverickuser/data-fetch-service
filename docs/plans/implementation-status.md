@@ -2,7 +2,7 @@
 
 Branch: `stack/10-infrastructure`. No remote PR or AWS resources created. Foundation committed as `e4bbe13`; its separate agent review covered staged content, not the committed head. PR 02 is approved through `cd31c10`, PR 03 through `8763839`, PR 04 through `eefd677`, PR 05 through `0d8cd94`, PR 06 through `d94ba82`, PR 07 through `a786f0c7`, PR 08 through `5e8c708`, PR 09a through `78e2455`, PR 09b through `5c24e5e`, and PR 09c through `6aea1ce`; exact-head local review records are under `.reports/`.
 
-History note (2026-10-02): before the first push, the stack's commits were rewritten to remove a deployment role ARN from two documents; no code changed. Hashes cited in this file, in the PR descriptions, and in `.reports/` are the pre-rewrite hashes. Reviewed heads map as: `e4bbe13`→`8afc06c`, `cd31c10`→`68dc1cc`, `8763839`→`4c09853`, `eefd677`→`33ba3c8`, `0d8cd94`→`e3246a7`, `d94ba82`→`d60c3e3`, `a786f0c7`→`eaa1856`, `5e8c708`→`1aa8758`, `78e2455`→`98b0fee`, `5c24e5e`→`01eec01`, `6aea1ce`→`ac26473`.
+History note (2026-10-02): before the first push, the stack's commits were rewritten to remove a deployment role ARN from two documents; no code changed. Hashes cited in this file, in the PR descriptions, and in `.reports/` are the pre-rewrite hashes. Reviewed heads map as: `e4bbe13`→`8afc06c`, `cd31c10`→`68dc1cc`, `8763839`→`4c09853`, `eefd677`→`33ba3c8`, `0d8cd94`→`e3246a7`, `d94ba82`→`d60c3e3`, `a786f0c7`→`eaa1856`, `5e8c708`→`1aa8758`, `78e2455`→`98b0fee`, `5c24e5e`→`01eec01`, `6aea1ce`→`ac26473`, `bb3c88d`→`60fa9d3`.
 
 | Increment | Status |
 |---|---|
@@ -17,10 +17,10 @@ History note (2026-10-02): before the first push, the stack's commits were rewri
 | 09a Full rerun | Implemented locally; independent committed-head review approved under `.reports/` |
 | 09b Delivery retry | Implemented locally; independent committed-head review approved under `.reports/` |
 | 09c API contracts and telemetry | Implemented locally; independent exact-head review approved under `.reports/` |
-| 10 Terraform runtime infrastructure | Implemented locally; not applied; reviewer-agent findings on `bb3c88d` fixed; re-review of the fixed head pending |
+| 10 Terraform runtime infrastructure | Implemented locally; not applied; reviewer-agent findings on `bb3c88d` fixed in `6de68d8`; re-review confirmed them resolved and raised one documentation correction, since applied |
 | 11–12 | Planned; not implemented |
 
-Verified locally: gofmt/vet/staticcheck/errcheck; race/unit coverage greater than 95%; weighted-coverage regression checks; native and Linux/arm64 builds; configuration validation; documentation links; OpenAPI JSON/YAML parity. Current reports are in `.reports/`. CI (`.github/workflows/quality.yml`) is defined for pull requests and pushes to `main` and `stack/**` as separate jobs: Compile, then Unit tests and coverage, then Mocked integration tests, with lint/docs/contract and Terraform checks alongside. It has no deployment job and has not run on GitHub.
+Verified locally: gofmt/vet/staticcheck/errcheck; race/unit coverage greater than 95%; weighted-coverage regression checks; native and Linux/arm64 builds; configuration validation; documentation links; OpenAPI JSON/YAML parity. Current reports are in `.reports/`. CI (`.github/workflows/quality.yml`) is defined for pull requests and pushes to `main` and `stack/**` as separate jobs: Compile, then Unit tests and coverage, then Mocked integration tests, with lint/docs/contract and Terraform checks alongside. It has no deployment job. All five jobs passed on GitHub for the stack head in pull request #1.
 
 PR 02 includes strict YAML overlays, pinned configuration revisions, safe template resolution, CloudEvents/SQS/native EventBridge normalization, resolved immutable JSON snapshots, and request/execution identities. Production BSE and six NSDL jobs are configured. PR 04 loads approved native mappings from `config/native-events.yaml`; its empty default enables no native producers. Full AWS schedule-expression validation belongs to Terraform in PR 10. The disabled processor target is an explicit placeholder until the endpoint is provided.
 

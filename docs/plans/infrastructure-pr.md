@@ -16,7 +16,6 @@ Behaviour worth reviewing:
 Known gaps, not implemented here:
 
 - Alarms cover queue age, DLQ depth, handler retry outcomes, and Lambda invocation errors. The LLD's state-derived failed-run and expired-ownership metrics are not emitted by the Go handlers, so no alarm exists for them yet.
-- A failing `terraform test` assertion on an IAM policy crashes Terraform 1.16.4 while printing the diagnostic; the run still fails.
 - Alarms have no notification target, the Scheduler trust policy has no source-account condition, and noncurrent object versions persist for a further 30 days after expiry.
 - No trusted plan has run: it needs AWS access and the real network and processor states.
 
