@@ -11,7 +11,7 @@ Two Terraform root modules, both pinned to Terraform `~> 1.16.4` and AWS provide
 
 ## Apply order
 
-1. Shared-network state (owned elsewhere).
+1. Shared-network state, owned by `cloud-platform-network`. The manual `Shared network` workflow in this repository calls its reusable workflow; it only plans unless `apply` is ticked.
 2. `data-processing-service` infrastructure.
 3. `bootstrap/`, then `service/`.
 
@@ -32,7 +32,7 @@ terraform -chdir=infra/service init \
 | Shared network | `vpc_id`, `private_subnet_ids_by_az`, `private_route_table_ids_by_az`, `nat_gateway_ids_by_az`, `s3_endpoint_id`, `sqs_endpoint_id`, `logs_endpoint_id`, `fetch_lambda_security_group_id` |
 | Processor | `vpc_id`, `processor_api_endpoint`, `processor_submission_route_arn` |
 
-Preconditions fail the plan when a Lambda subnet is public or outside the shared VPC, a private route table lacks its NAT default route, an endpoint is in another VPC or lacks private DNS, the S3 endpoint policy omits either service bucket, the processor is in another VPC, or `processor_api_endpoint` differs from the bundled `processor.url`.
+Preconditions fail the plan when a Lambda subnet is public or outside the shared VPC, a private route table lacks its NAT default route, an endpoint is in another VPC or lacks private DNS, the S3 endpoint policy allows neither this account's buckets nor both service buckets, the processor is in another VPC, or `processor_api_endpoint` differs from the bundled `processor.url`.
 
 ## Service inputs
 

@@ -87,8 +87,14 @@ resource "terraform_data" "network_contract" {
       error_message = "S3 gateway endpoint must be associated with every private route table."
     }
     precondition {
-      condition     = alltrue([for bucket_arn in [aws_s3_bucket.artifacts.arn, aws_s3_bucket.state.arn] : strcontains(data.aws_vpc_endpoint.s3.policy, bucket_arn)])
-      error_message = "Shared S3 endpoint policy must allow both service buckets."
+      # The shared network scopes its endpoint to this account; a policy naming both buckets is also accepted.
+      condition = anytrue([for statement in jsondecode(data.aws_vpc_endpoint.s3.policy).Statement :
+        statement.Effect == "Allow" && (
+          try(statement.Condition.StringEquals["aws:ResourceAccount"], "") == data.aws_caller_identity.current.account_id ||
+          alltrue([for bucket_arn in [aws_s3_bucket.artifacts.arn, aws_s3_bucket.state.arn] : contains(flatten([statement.Resource]), "${bucket_arn}/*")])
+        )
+      ])
+      error_message = "Shared S3 endpoint policy must allow this account's buckets or both service buckets."
     }
   }
 }

@@ -111,7 +111,7 @@ All five fetch Lambda functions are attached to private subnets in at least two 
 
 The service uses these private connectivity paths:
 
-- An S3 gateway endpoint for artifact and state buckets, restricted by endpoint policy to the two service buckets.
+- An S3 gateway endpoint for artifact and state buckets. The shared network restricts it by endpoint policy to buckets in this AWS account, because it cannot know each service's bucket names; a policy naming the two service buckets is also accepted.
 - Interface endpoints for SQS and CloudWatch Logs, with private DNS enabled. Endpoint security groups allow TCP 443 from the Lambda security group only. SQS event-source mappings remain an AWS control-plane integration; the Lambda code's SDK calls use the SQS endpoint.
 - The BSE and NSDL public HTTPS endpoints and processor API Gateway hostname are reached through NAT egress from the private subnets. Processor submission uses the IAM-protected API Gateway route; the processor's application Lambdas remain in the shared VPC.
 
@@ -119,7 +119,7 @@ Terraform receives the VPC ID, private subnet IDs, and Availability Zone mapping
 
 ### Shared-VPC contract with structured-file processing
 
-The VPC is owned by a separate shared-network Terraform state. The processor service and this service consume the same versioned network outputs; neither application stack creates a VPC or chooses arbitrary subnet IDs. Required network outputs are `vpc_id`, private subnet IDs and route tables by Availability Zone, NAT gateway IDs, `fetch_lambda_security_group_id`, and the IDs of the S3/SQS/Logs endpoints. The processor stack exposes `vpc_id`, `processor_api_endpoint`, and `processor_submission_route_arn`. It grants the fetch Delivery and Reconciler roles access to its IAM-protected `POST /v1/event-ingestions` route; those roles grant `execute-api:Invoke` on that route only.
+The VPC is owned by a separate shared-network Terraform state in the `cloud-platform-network` repository (state bucket `cloud-platform-network-terraform-state`, key `network/terraform.tfstate`). Service pipelines call that repository's reusable workflow first; it creates the network on the first call and changes nothing afterwards. The processor service and this service consume the same versioned network outputs; neither application stack creates a VPC or chooses arbitrary subnet IDs. Required network outputs are `vpc_id`, private subnet IDs and route tables by Availability Zone, NAT gateway IDs, `fetch_lambda_security_group_id`, and the IDs of the S3/SQS/Logs endpoints. The processor stack exposes `vpc_id`, `processor_api_endpoint`, and `processor_submission_route_arn`. It grants the fetch Delivery and Reconciler roles access to its IAM-protected `POST /v1/event-ingestions` route; those roles grant `execute-api:Invoke` on that route only.
 
 Terraform preconditions and CI checks compare the VPC ID for fetch Lambda subnets/security group and the processor state. The deployment fails on a mismatch. Apply network state first, processor infrastructure second, and this service third. The final smoke test sends a SigV4-signed request through the processor API Gateway hostname and verifies its HTTP 202 receipt.
 

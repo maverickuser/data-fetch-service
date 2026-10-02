@@ -14,11 +14,13 @@ variable "hosted_zone_id" {
 
 variable "network_state_bucket" {
   type        = string
-  description = "Bucket containing the shared-network Terraform state."
+  default     = "cloud-platform-network-terraform-state"
+  description = "Bucket containing the shared-network Terraform state, owned by cloud-platform-network."
 }
 
 variable "network_state_key" {
   type        = string
+  default     = "network/terraform.tfstate"
   description = "Shared-network state key; this service does not create a VPC."
 }
 

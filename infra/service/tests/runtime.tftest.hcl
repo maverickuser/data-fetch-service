@@ -1,4 +1,7 @@
 mock_provider "aws" {
+  mock_data "aws_caller_identity" {
+    defaults = { account_id = "123456789012" }
+  }
   mock_resource "aws_iam_role" {
     defaults = { arn = "arn:aws:iam::123456789012:role/mock" }
   }
@@ -57,8 +60,6 @@ override_data {
 
 variables {
   aws_region             = "ap-south-1"
-  network_state_bucket   = "test-shared-state"
-  network_state_key      = "network.tfstate"
   processor_state_bucket = "test-processor-state"
   processor_state_key    = "processor.tfstate"
   hosted_zone_id         = "Z1234567890"
@@ -123,7 +124,7 @@ override_data {
 
 override_data {
   target = data.aws_vpc_endpoint.s3
-  values = { vpc_id = "vpc-test", route_table_ids = ["rtb-a", "rtb-b"], policy = "arn:aws:s3:::data-fetch-service-artifacts arn:aws:s3:::data-fetch-service-state" }
+  values = { vpc_id = "vpc-test", route_table_ids = ["rtb-a", "rtb-b"], policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:*\",\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"aws:ResourceAccount\":\"123456789012\"}}}]}" }
 }
 
 override_data {
@@ -298,4 +299,24 @@ run "rejects_processor_endpoint_not_in_bundled_config" {
   }
 
   expect_failures = [terraform_data.network_contract, terraform_data.configuration_contract]
+}
+
+run "rejects_endpoint_policy_for_another_account" {
+  command = plan
+
+  override_data {
+    target = data.aws_vpc_endpoint.s3
+    values = { vpc_id = "vpc-test", route_table_ids = ["rtb-a", "rtb-b"], policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:*\",\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"aws:ResourceAccount\":\"999999999999\"}}}]}" }
+  }
+
+  expect_failures = [terraform_data.network_contract]
+}
+
+run "accepts_endpoint_policy_naming_both_buckets" {
+  command = plan
+
+  override_data {
+    target = data.aws_vpc_endpoint.s3
+    values = { vpc_id = "vpc-test", route_table_ids = ["rtb-a", "rtb-b"], policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:*\",\"Resource\":[\"arn:aws:s3:::data-fetch-service-artifacts/*\",\"arn:aws:s3:::data-fetch-service-state/*\"]}]}" }
+  }
 }
