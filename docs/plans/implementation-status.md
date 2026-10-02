@@ -1,6 +1,6 @@
 # Implementation status
 
-Branch: `stack/09-api-telemetry`. No remote PR or AWS resources created. Foundation committed as `e4bbe13`; its separate agent review covered staged content, not the committed head. PR 02 is approved through `cd31c10`, PR 03 through `8763839`, PR 04 through `eefd677`, PR 05 through `0d8cd94`, PR 06 through `d94ba82`, PR 07 through `a786f0c7`, PR 08 through `5e8c708`, PR 09a through `78e2455`, and PR 09b through `5c24e5e`; exact-head local review records are under `.reports/`.
+Branch: `stack/10-infrastructure`. No remote PR or AWS resources created. Foundation committed as `e4bbe13`; its separate agent review covered staged content, not the committed head. PR 02 is approved through `cd31c10`, PR 03 through `8763839`, PR 04 through `eefd677`, PR 05 through `0d8cd94`, PR 06 through `d94ba82`, PR 07 through `a786f0c7`, PR 08 through `5e8c708`, PR 09a through `78e2455`, PR 09b through `5c24e5e`, and PR 09c through `6aea1ce`; exact-head local review records are under `.reports/`.
 
 | Increment | Status |
 |---|---|
@@ -14,7 +14,7 @@ Branch: `stack/09-api-telemetry`. No remote PR or AWS resources created. Foundat
 | 08 Reconciler and automatic retries | Implemented locally; independent committed-head review approved under `.reports/` |
 | 09a Full rerun | Implemented locally; independent committed-head review approved under `.reports/` |
 | 09b Delivery retry | Implemented locally; independent committed-head review approved under `.reports/` |
-| 09c API contracts and telemetry | Implemented locally; exact-head review pending |
+| 09c API contracts and telemetry | Implemented locally; independent exact-head review approved under `.reports/` |
 | 10–12 | Planned; not implemented |
 
 Verified locally: gofmt/vet/staticcheck/errcheck; race/unit coverage greater than 95%; weighted-coverage regression checks; native and Linux/arm64 builds; configuration validation; documentation links; OpenAPI JSON/YAML parity. Current reports are in `.reports/`. CI YAML is prepared but has not run on GitHub.
@@ -39,6 +39,6 @@ PR 09a adds `POST /v1/runs/{run_id}/reruns`, cloning the original resolved snaps
 
 PR 09b adds `POST /v1/runs/{run_id}/delivery-retries` for delivery-stage failures. It validates the retained complete files and acceptance baseline, creates a linked immutable child manifest, supports explicit current processor configuration, and runs a delivery-only Pull path without source requests or automatic source retries. A failed delivery retry can be retried again with idempotent replay while retaining the original raw-file provenance. Reconciliation resumes an interrupted delivery-only handoff without changing it to an unchanged-data skip. Missing artifacts return 410; a newer different accepted dataset blocks stale recovery. Unit tests keep the >95% gate separate from mocked HTTP-to-state-to-worker integration tests. `make check` passes 3128/3292 unit statements (95.02%) with race, integration, lint, native/Linux arm64 build, configuration, documentation, and OpenAPI parity checks. Independent committed-head review approved `5c24e5e`; evidence is under `.reports/pr09b-review.json`. See [the local PR description](delivery-retry-pr.md).
 
-PR 09c adds bounded JSON/CloudWatch Embedded Metric Format outcome records at all five Lambda adapters. Root snapshots carry a correlation ID through linked and automatic child runs, and adapters resolve that identity for logs within a short telemetry-only deadline. Mocked API tests cover success and failure cases for every route, plus HTTP-to-Pull-to-processor delivery, completed-run reads, and linked-run log correlation. `make check` passes 3246/3414 unit statements (95.08%) and all existing deterministic gates. See [the local PR description](api-telemetry-pr.md). Independent committed-head review remains pending.
+PR 09c adds bounded JSON/CloudWatch Embedded Metric Format outcome records at all five Lambda adapters. Root snapshots carry a correlation ID through linked and automatic child runs, and adapters resolve that identity for logs within a short telemetry-only deadline. Mocked API tests cover success and failure cases for every route, plus HTTP-to-Pull-to-processor delivery, completed-run reads, and linked-run log correlation. `make check` passes 3246/3414 unit statements (95.08%) and all existing deterministic gates. See [the local PR description](api-telemetry-pr.md). Independent committed-head review approved `6aea1ce`; evidence is under `.reports/pr09c-review.json`.
 
-Next: independent PR 09c review, then Terraform and deployment work. Live AWS/source tests are deferred until release.
+Next: PR 10 Terraform runtime infrastructure, then release verification and deployment work. Live AWS/source tests are deferred until release.
