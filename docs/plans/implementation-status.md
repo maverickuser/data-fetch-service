@@ -4,6 +4,8 @@ Increments 01–10 are merged to `main` (pull request #1). The smoke runner was 
 
 History note (2026-10-02): before the first push, the stack's commits were rewritten to remove a deployment role ARN from two documents; no code changed. Hashes cited in this file, in the PR descriptions, and in `.reports/` are the pre-rewrite hashes. Reviewed heads map as: `e4bbe13`→`8afc06c`, `cd31c10`→`68dc1cc`, `8763839`→`4c09853`, `eefd677`→`33ba3c8`, `0d8cd94`→`e3246a7`, `d94ba82`→`d60c3e3`, `a786f0c7`→`eaa1856`, `5e8c708`→`1aa8758`, `78e2455`→`98b0fee`, `5c24e5e`→`01eec01`, `6aea1ce`→`ac26473`, `bb3c88d`→`60fa9d3`.
 
+Shared network (2026-10-02): the VPC now comes from the separate `cloud-platform-network` repository. This repository has a manual `Shared network` workflow that calls it; no plan or apply has run and no network exists.
+
 | Increment | Status |
 |---|---|
 | 01 Foundation | Implemented locally; separate agent reviewed staged content with no blockers |
