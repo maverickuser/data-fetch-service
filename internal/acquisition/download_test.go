@@ -99,7 +99,11 @@ func TestSourceStatusRetryClassification(t *testing.T) {
 	for _, status := range []int{206, 400, 404, 408, 429, 500, 503} {
 		err := checkResponse(&http.Response{StatusCode: status, Header: http.Header{"Retry-After": {"999"}}}, "json", time.Now())
 		var failure *Failure
-		if !errors.As(err, &failure) || failure.Retryable != (status == 408 || status == 429 || status >= 500) || failure.RetryAfter != 999*time.Second {
+		wantCode := "SOURCE_HTTP"
+		if status == 404 {
+			wantCode = "SOURCE_NOT_FOUND"
+		}
+		if !errors.As(err, &failure) || failure.Code != wantCode || failure.Retryable != (status == 408 || status == 429 || status >= 500) || failure.RetryAfter != 999*time.Second {
 			t.Fatal(status, err)
 		}
 	}

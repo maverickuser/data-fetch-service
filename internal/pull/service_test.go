@@ -439,7 +439,7 @@ func TestPullOutcomesControlExpiredExecutionRecovery(t *testing.T) {
 			if err := json.Unmarshal(objects.items[resultKey].Data, &outcome); err != nil {
 				t.Fatal(err)
 			}
-			wantStatus, wantCode := "failed", "SOURCE_HTTP"
+			wantStatus, wantCode := "failed", "SOURCE_NOT_FOUND"
 			if scenario == "group-budget" {
 				wantStatus, wantCode = "interrupted", "GROUP_BUDGET_EXCEEDED"
 			}
