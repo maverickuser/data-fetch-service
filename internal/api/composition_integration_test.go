@@ -3,6 +3,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -19,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	lambdaevents "github.com/aws/aws-lambda-go/events"
 	"github.com/maverickuser/data-fetch-service/internal/acquisition"
 	"github.com/maverickuser/data-fetch-service/internal/admission"
 	"github.com/maverickuser/data-fetch-service/internal/config"
@@ -27,6 +29,7 @@ import (
 	"github.com/maverickuser/data-fetch-service/internal/events"
 	"github.com/maverickuser/data-fetch-service/internal/pull"
 	"github.com/maverickuser/data-fetch-service/internal/state"
+	"github.com/maverickuser/data-fetch-service/internal/telemetry"
 )
 
 type retryArtifacts struct{ data map[string][]byte }
@@ -231,6 +234,26 @@ func TestHTTPCompositionDeliveryRetryCompletesThroughProcessor(t *testing.T) {
 		if response.Code != 200 || !strings.Contains(response.Body.String(), "completed") && path == "/v1/runs/child" {
 			t.Fatal(path, response.Code, response.Body.String())
 		}
+	}
+}
+
+func TestHTTPCompositionLinkedRunLogsRootCorrelation(t *testing.T) {
+	h, _, objects, _, _, _ := retryComposition(t)
+	if response := call(h, http.MethodPost, "/v1/runs/root/delivery-retries", `{}`); response.Code != 202 {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	var logs bytes.Buffer
+	adapter := Lambda{Handler: h.Routes(), Snapshots: state.New(objects), Telemetry: &telemetry.JSON{Output: &logs}}
+	for _, run := range []string{"root", "child"} {
+		event := lambdaevents.APIGatewayV2HTTPRequest{RawPath: "/v1/runs/" + run}
+		event.RequestContext.HTTP.Method = http.MethodGet
+		response, err := adapter.Handle(context.Background(), event)
+		if err != nil || response.StatusCode != 200 {
+			t.Fatal(run, response.StatusCode, err)
+		}
+	}
+	if strings.Count(logs.String(), `"correlation_id":"root"`) != 2 || !strings.Contains(logs.String(), `"run_id":"child"`) {
+		t.Fatal(logs.String())
 	}
 }
 

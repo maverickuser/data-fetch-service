@@ -17,6 +17,7 @@ import (
 type Lambda struct {
 	Handler   http.Handler
 	Telemetry telemetry.Recorder
+	Snapshots telemetry.SnapshotReader
 }
 
 // Handle preserves encoded paths/query values and returns JSON responses to API Gateway.
@@ -42,7 +43,7 @@ func (l Lambda) Handle(ctx context.Context, event events.APIGatewayV2HTTPRequest
 				result.RunID = parts[3]
 			}
 		}
-		l.Telemetry.Record(telemetry.Entry{Component: "api", Operation: "request", Outcome: outcome, RunID: result.RunID, RequestID: event.RequestContext.RequestID, ErrorCode: code})
+		l.Telemetry.Record(telemetry.Entry{Component: "api", Operation: "request", Outcome: outcome, RunID: result.RunID, RequestID: event.RequestContext.RequestID, Correlation: telemetry.Correlation(ctx, l.Snapshots, result.RunID), ErrorCode: code})
 	}
 	return response, err
 }

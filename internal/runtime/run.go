@@ -132,7 +132,7 @@ func Start(ctx context.Context, kind string, d Dependencies) error {
 		service.ArtifactBucket = artifactBucket
 		service.Records = store
 		handler := &api.Handler{Service: service, Recovery: service, DeliveryRecovery: service, Store: store, Coordinator: coordinator, Config: cfg, Now: time.Now}
-		adapter := api.Lambda{Handler: handler.Routes(), Telemetry: recorder}
+		adapter := api.Lambda{Handler: handler.Routes(), Telemetry: recorder, Snapshots: store}
 		d.Start(adapter.Handle)
 	}
 	return nil
