@@ -98,6 +98,7 @@ type Report struct {
 	BSESelectedDate  string      `json:"bse_selected_date,omitempty"`
 	TodayUnavailable bool        `json:"bse_today_unavailable"`
 	BSEFile          string      `json:"bse_file,omitempty"`
+	BSEHandoff       string      `json:"bse_handoff,omitempty"`
 	NSDLRunID        string      `json:"nsdl_run_id,omitempty"`
 	NSDLFiles        []string    `json:"nsdl_files,omitempty"`
 	ForcedRunID      string      `json:"forced_run_id,omitempty"`
@@ -109,6 +110,7 @@ type Report struct {
 type runView struct {
 	RunID       string `json:"run_id"`
 	Phase       string `json:"phase"`
+	ChildRunID  string `json:"child_run_id"`
 	LatestRunID string `json:"latest_run_id"`
 	LatestPhase string `json:"latest_phase"`
 }
@@ -231,6 +233,14 @@ func (r *Runner) bse(ctx context.Context, report *Report) error {
 		if files[0] != want {
 			return fmt.Errorf("smoke BSE %s: stored %q, want %q", date, files[0], want)
 		}
+		// An unchanged dataset was accepted earlier and is not resubmitted; report that no handoff was observed.
+		report.BSEHandoff = "skipped_unchanged"
+		if view.Phase == "completed" {
+			if err := r.accepted(ctx, view.RunID); err != nil {
+				return fmt.Errorf("smoke BSE %s: %w", date, err)
+			}
+			report.BSEHandoff = "accepted"
+		}
 		report.BSESelectedDate, report.BSEFile, report.TodayUnavailable = date, want, index > 0
 		return nil
 	}
@@ -283,6 +293,21 @@ func (r *Runner) forced(ctx context.Context, report *Report) error {
 	if view.Phase != "completed" {
 		return fmt.Errorf("smoke forced run: run %s ended %q, want completed", view.RunID, view.Phase)
 	}
+	jobs, err := r.jobs(ctx, view.RunID)
+	if err != nil {
+		return fmt.Errorf("smoke forced run: %w", err)
+	}
+	if _, err := r.files(ctx, view.RunID, jobs, len(nsdlJobs)); err != nil {
+		return fmt.Errorf("smoke forced run: %w", err)
+	}
+	if err := r.accepted(ctx, view.RunID); err != nil {
+		return fmt.Errorf("smoke forced run: %w", err)
+	}
+	return nil
+}
+
+// accepted requires a recorded processor HTTP 202 with a receipt for the run.
+func (r *Runner) accepted(ctx context.Context, runID string) error {
 	var page struct {
 		Items []struct {
 			Status  int    `json:"status"`
@@ -292,15 +317,15 @@ func (r *Runner) forced(ctx context.Context, report *Report) error {
 			} `json:"receipt"`
 		} `json:"items"`
 	}
-	if _, err := r.call(ctx, http.MethodGet, "/v1/runs/"+view.RunID+"/delivery?limit=100", "", nil, &page); err != nil {
-		return fmt.Errorf("smoke forced run: %w", err)
+	if _, err := r.call(ctx, http.MethodGet, "/v1/runs/"+runID+"/delivery?limit=100", "", nil, &page); err != nil {
+		return err
 	}
 	for _, item := range page.Items {
 		if item.Status == http.StatusAccepted && item.Code == "ACCEPTED" && item.Receipt != nil {
 			return nil
 		}
 	}
-	return fmt.Errorf("smoke forced run: run %s has no recorded processor HTTP 202", view.RunID)
+	return fmt.Errorf("run %s has no recorded processor HTTP 202", runID)
 }
 
 // completed waits for a run and requires a successful terminal phase with validated files.
@@ -373,6 +398,13 @@ func (r *Runner) await(ctx context.Context, runID string) (runView, error) {
 			current = runView{RunID: view.LatestRunID, Phase: view.LatestPhase}
 			continue
 		}
+		// A linked retry child may not be readable yet; a failed parent with a child is not terminal.
+		if view.ChildRunID != "" && view.ChildRunID != current.RunID {
+			if err := r.pause(ctx, deadline, "retry child of run "+current.RunID+" did not start"); err != nil {
+				return current, err
+			}
+			continue
+		}
 		if current.Phase == "completed" || current.Phase == "skipped_unchanged" || current.Phase == "failed" {
 			return current, nil
 		}
@@ -430,8 +462,10 @@ func (r *Runner) files(ctx context.Context, runID string, jobs []jobRecord, coun
 		if job.Status != "completed" || job.Result == nil || job.Result.Filename == "" || !strings.HasPrefix(job.Result.Artifact.Key, "runs/") {
 			return nil, fmt.Errorf("run %s job %s is %q without a stored artifact", runID, job.JobID, job.Status)
 		}
-		if found, err := r.Objects.Exists(ctx, job.Result.Artifact.Key); err != nil || !found {
-			return nil, fmt.Errorf("run %s artifact for job %s is not readable: %v", runID, job.JobID, err)
+		if found, err := r.Objects.Exists(ctx, job.Result.Artifact.Key); err != nil {
+			return nil, fmt.Errorf("run %s artifact for job %s is not readable: %w", runID, job.JobID, err)
+		} else if !found {
+			return nil, fmt.Errorf("run %s artifact for job %s is not readable: object is missing", runID, job.JobID)
 		}
 		if index, known := order[job.JobID]; known && count == len(nsdlJobs) {
 			sorted[index] = job.Result.Filename
@@ -441,8 +475,10 @@ func (r *Runner) files(ctx context.Context, runID string, jobs []jobRecord, coun
 	if len(names) != count {
 		return nil, fmt.Errorf("run %s stored %d files, want %d", runID, len(names), count)
 	}
-	if found, err := r.Objects.Exists(ctx, "runs/"+runID+"/manifest.json"); err != nil || !found {
-		return nil, fmt.Errorf("run %s manifest is not readable: %v", runID, err)
+	if found, err := r.Objects.Exists(ctx, "runs/"+runID+"/manifest.json"); err != nil {
+		return nil, fmt.Errorf("run %s manifest is not readable: %w", runID, err)
+	} else if !found {
+		return nil, fmt.Errorf("run %s manifest is not readable: object is missing", runID)
 	}
 	if count == len(nsdlJobs) {
 		return sorted, nil

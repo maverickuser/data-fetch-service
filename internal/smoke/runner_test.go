@@ -40,6 +40,8 @@ type fakeService struct {
 	sleeps       int
 	forcedPhase  string
 	retryChild   bool
+	bsePhase     string
+	slowChild    int
 }
 
 type fakeRun struct {
@@ -48,6 +50,7 @@ type fakeRun struct {
 	force bool
 	polls int
 	child string
+	bse   bool
 }
 
 func newFake(t *testing.T, now time.Time) *fakeService {
@@ -155,6 +158,10 @@ func (f *fakeService) Do(request *http.Request) (*http.Response, error) {
 			} else if body.Inputs["exchangeName"] != "BSE" {
 				f.t.Fatal(body.Inputs)
 			}
+			run.bse = true
+			if f.bsePhase != "" {
+				run.phase = f.bsePhase
+			}
 			if f.retryChild {
 				child := id + "c"
 				f.runs[child] = run
@@ -178,10 +185,15 @@ func (f *fakeService) Do(request *http.Request) (*http.Response, error) {
 			return reply(http.StatusOK, map[string]string{"run_id": parts[1], "phase": "pulling", "latest_run_id": parts[1], "latest_phase": "pulling"}), nil
 		}
 		latest, phase := parts[1], run.phase
+		if run.child != "" && f.slowChild > 0 {
+			// The link is durable before the child becomes readable.
+			f.slowChild--
+			return reply(http.StatusOK, map[string]string{"run_id": parts[1], "phase": run.phase, "child_run_id": run.child, "latest_run_id": latest, "latest_phase": phase}), nil
+		}
 		if run.child != "" {
 			latest, phase = run.child, f.runs[run.child].phase
 		}
-		return reply(http.StatusOK, map[string]string{"run_id": parts[1], "phase": run.phase, "latest_run_id": latest, "latest_phase": phase}), nil
+		return reply(http.StatusOK, map[string]string{"run_id": parts[1], "phase": run.phase, "child_run_id": run.child, "latest_run_id": latest, "latest_phase": phase}), nil
 	case parts[0] == "runs" && parts[2] == "pulls":
 		items := []any{map[string]any{"attempt": 1, "status_code": 200}}
 		if f.extraPages && request.URL.Query().Get("cursor") == "" {
@@ -192,8 +204,8 @@ func (f *fakeService) Do(request *http.Request) (*http.Response, error) {
 		}
 		return reply(http.StatusOK, map[string]any{"items": items, "next_cursor": ""}), nil
 	case parts[0] == "runs" && parts[2] == "delivery":
-		if !f.runs[parts[1]].force {
-			f.t.Fatal("delivery read for an unforced run")
+		if run := f.runs[parts[1]]; !run.force && !(run.bse && run.phase == "completed") {
+			f.t.Fatal("delivery read for a run without a handoff")
 		}
 		return reply(http.StatusOK, map[string]any{"items": []any{map[string]any{"attempt": 1}, map[string]any{"status": 202, "code": f.deliveryCode, "receipt": map[string]string{"status": "ACCEPTED"}}}}), nil
 	}
@@ -219,6 +231,9 @@ func TestSuitePassesAgainstHealthyDeployment(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantFiles := []string{isin + "_isin-details.json", isin + "_instrument-details.json", isin + "_coupon-details.json", isin + "_redemptions.json", isin + "_listings.json", isin + "_credit-ratings.json"}
+	if report.BSEHandoff != "accepted" {
+		t.Fatal(report.BSEHandoff)
+	}
 	if !report.Passed || report.Failure != "" || !report.ScheduleVerified || report.TodayUnavailable || report.BSESelectedDate != "2026-09-21" || report.BSEFile != "BSE_fgroup21092026.csv" || !reflect.DeepEqual(report.NSDLFiles, wantFiles) || report.NSDLRunID == "" || report.ForcedRunID == "" || report.Commit != "abc" {
 		t.Fatalf("%+v", report)
 	}
@@ -292,10 +307,33 @@ func TestSuiteUsesIndiaDateCapturedOnce(t *testing.T) {
 }
 
 func TestSuiteFollowsAutomaticRetryChild(t *testing.T) {
+	for _, slow := range []int{0, 3} {
+		fake := newFake(t, ist(2026, 9, 21, 21))
+		fake.retryChild, fake.slowChild = true, slow
+		report, err := fake.runner().Run(context.Background())
+		if err != nil || !strings.HasSuffix(report.BSECandidates[0].RunID, "c") || fake.slowChild != 0 {
+			t.Fatalf("%d: %+v %v", slow, report, err)
+		}
+	}
+	stuck := newFake(t, ist(2026, 9, 21, 21))
+	stuck.retryChild, stuck.slowChild = true, 1000
+	if _, err := stuck.runner().Run(context.Background()); err == nil || !strings.Contains(err.Error(), "did not start") {
+		t.Fatal(err)
+	}
+}
+
+func TestBSEReportsWhetherAHandoffWasObserved(t *testing.T) {
 	fake := newFake(t, ist(2026, 9, 21, 21))
-	fake.retryChild = true
+	fake.bsePhase = "skipped_unchanged"
 	report, err := fake.runner().Run(context.Background())
-	if err != nil || !strings.HasSuffix(report.BSECandidates[0].RunID, "c") {
+	if err != nil || !report.Passed || report.BSEHandoff != "skipped_unchanged" || report.BSEFile != "BSE_fgroup21092026.csv" {
+		t.Fatalf("%+v %v", report, err)
+	}
+	// Every job completed but delivery failed: not a missing file, so no date fallback.
+	failed := newFake(t, ist(2026, 9, 21, 21))
+	failed.bsePhase = "failed"
+	report, err = failed.runner().Run(context.Background())
+	if err == nil || len(report.BSECandidates) != 1 || report.BSECandidates[0].ErrorCode != "UNKNOWN_FAILURE" {
 		t.Fatalf("%+v %v", report, err)
 	}
 }
@@ -357,17 +395,20 @@ func TestSuiteFailsWithDiagnostics(t *testing.T) {
 		"wrong BSE name": {func(f *fakeService, _ *Runner) {
 			f.raw["/v1/runs/run_1/pulls"] = `{"items":[{"job_id":"debt-bhavcopy","status":"completed","result":{"filename":"fgroup21092026.csv","artifact":{"key":"runs/run_1/x"}}}]}`
 		}, `want "BSE_fgroup21092026.csv"`},
-		"queue send":       {func(f *fakeService, _ *Runner) { f.sendErr = broken }, "send to ingress"},
-		"never admitted":   {func(f *fakeService, _ *Runner) { f.unresolved = 1000 }, "was not admitted"},
-		"lookup failure":   {func(f *fakeService, _ *Runner) { f.status["/v1/requests/"] = 503 }, "HTTP 503"},
-		"NSDL wrong name":  {func(f *fakeService, _ *Runner) { f.nsdlRename = "listings" }, `stored "wrong.json"`},
-		"NSDL run read":    {func(f *fakeService, _ *Runner) { f.status["/v1/runs/run_2"] = 503 }, "smoke NSDL"},
-		"NSDL pulls":       {func(f *fakeService, _ *Runner) { f.status["/v1/runs/run_2/pulls"] = 503 }, "smoke NSDL"},
-		"forced admission": {func(f *fakeService, _ *Runner) { f.status["/v1/events/"+nsdlEvent] = 503 }, "smoke forced run"},
-		"forced run read":  {func(f *fakeService, _ *Runner) { f.status["/v1/runs/run_3"] = 503 }, "smoke forced run"},
-		"forced skipped":   {func(f *fakeService, _ *Runner) { f.forcedPhase = "skipped_unchanged" }, "want completed"},
-		"delivery read":    {func(f *fakeService, _ *Runner) { f.status["/v1/runs/run_3/delivery"] = 503 }, "HTTP 503"},
-		"no recorded 202":  {func(f *fakeService, _ *Runner) { f.deliveryCode = "INVALID_RECEIPT" }, "no recorded processor HTTP 202"},
+		"queue send":        {func(f *fakeService, _ *Runner) { f.sendErr = broken }, "send to ingress"},
+		"never admitted":    {func(f *fakeService, _ *Runner) { f.unresolved = 1000 }, "was not admitted"},
+		"lookup failure":    {func(f *fakeService, _ *Runner) { f.status["/v1/requests/"] = 503 }, "HTTP 503"},
+		"NSDL wrong name":   {func(f *fakeService, _ *Runner) { f.nsdlRename = "listings" }, `stored "wrong.json"`},
+		"NSDL run read":     {func(f *fakeService, _ *Runner) { f.status["/v1/runs/run_2"] = 503 }, "smoke NSDL"},
+		"NSDL pulls":        {func(f *fakeService, _ *Runner) { f.status["/v1/runs/run_2/pulls"] = 503 }, "smoke NSDL"},
+		"forced admission":  {func(f *fakeService, _ *Runner) { f.status["/v1/events/"+nsdlEvent] = 503 }, "smoke forced run"},
+		"forced run read":   {func(f *fakeService, _ *Runner) { f.status["/v1/runs/run_3"] = 503 }, "smoke forced run"},
+		"forced skipped":    {func(f *fakeService, _ *Runner) { f.forcedPhase = "skipped_unchanged" }, "want completed"},
+		"delivery read":     {func(f *fakeService, _ *Runner) { f.status["/v1/runs/run_3/delivery"] = 503 }, "HTTP 503"},
+		"BSE delivery read": {func(f *fakeService, _ *Runner) { f.status["/v1/runs/run_1/delivery"] = 503 }, "smoke BSE"},
+		"forced pulls":      {func(f *fakeService, _ *Runner) { f.status["/v1/runs/run_3/pulls"] = 503 }, "smoke forced run"},
+		"forced files":      {func(f *fakeService, _ *Runner) { f.missing["runs/run_3/manifest.json"] = true }, "object is missing"},
+		"no recorded 202":   {func(f *fakeService, _ *Runner) { f.deliveryCode = "INVALID_RECEIPT" }, "no recorded processor HTTP 202"},
 	} {
 		fake := newFake(t, ist(2026, 9, 21, 21))
 		runner := fake.runner()
