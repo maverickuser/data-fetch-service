@@ -1,0 +1,82 @@
+schema_version: 1
+defaults:
+  pull_concurrency: 3
+  request_timeout_seconds: 120
+  source_max_attempts: 3
+  pull_execution_max_retries: 3
+  max_download_bytes: 1073741824
+  max_extracted_bytes: 4294967296
+  max_zip_entries: 10000
+  max_compression_ratio: 100
+  max_validation_token_bytes: 1048576
+  max_json_depth: 128
+  max_zip_metadata_bytes: 8388608
+  max_temp_bytes: 3221225472
+processor:
+  enabled: false
+  url: https://processor.example.invalid/v1/event-ingestions
+  request_timeout_seconds: 30
+  max_attempts: 3
+events:
+  - id: daily-bhavcopy
+    enabled: true
+    dataset_type: urn:bond-platform:dataset:bse-debt-trades
+    timezone: Asia/Kolkata
+    inputs:
+      exchangeName:
+        type: string
+        required: true
+        pattern: '^[A-Za-z0-9-]+$'
+      run_date:
+        type: date
+        default: trigger_date
+    schedule:
+      enabled: true
+      expression: 'cron(0 20 ? * MON-FRI *)'
+      timezone: Asia/Kolkata
+      inputs:
+        exchangeName: BSE
+    jobs:
+      - id: debt-bhavcopy
+        request:
+          method: GET
+          url_template: https://www.bseindia.com/download/BhavCopy/Debt/{file_name}
+          variables:
+            file_name:
+              template: 'DEBTBHAVCOPY{run_date:ddMMyyyy}.zip'
+        response:
+          format: zip
+          extraction:
+            member_path: 'fgroup{run_date:ddMMyyyy}.csv'
+            format: csv
+            filename_template: '{exchangeName}_fgroup{run_date:ddMMyyyy}.csv'
+  - id: nsdl-bond-data
+    enabled: true
+    dataset_type: urn:bond-platform:dataset:nsdl-security
+    timezone: Asia/Kolkata
+    inputs:
+      isin_code:
+        type: string
+        required: true
+        pattern: '^[A-Z0-9]{12}$'
+    schedule:
+      enabled: false
+    jobs:
+      - id: isin-details
+        request: {method: GET, url_template: 'https://www.indiabondinfo.nsdl.com/bds-service/v1/public/isins?isin={isin_code}'}
+        response: {format: json, filename_template: '{isin_code}_isin-details.json'}
+      - id: instrument-details
+        request: {method: GET, url_template: 'https://www.indiabondinfo.nsdl.com/bds-service/v1/public/bdsinfo/instruments?isin={isin_code}'}
+        response: {format: json, filename_template: '{isin_code}_instrument-details.json'}
+      - id: coupon-details
+        request: {method: GET, url_template: 'https://www.indiabondinfo.nsdl.com/bds-service/v1/public/bdsinfo/coupondetail?isin={isin_code}'}
+        response: {format: json, filename_template: '{isin_code}_coupon-details.json'}
+      - id: redemptions
+        request: {method: GET, url_template: 'https://www.indiabondinfo.nsdl.com/bds-service/v1/public/bdsinfo/redemptions?isin={isin_code}'}
+        response: {format: json, filename_template: '{isin_code}_redemptions.json'}
+      - id: listings
+        request: {method: GET, url_template: 'https://www.indiabondinfo.nsdl.com/bds-service/v1/public/bdsinfo/listings?isin={isin_code}'}
+        response: {format: json, filename_template: '{isin_code}_listings.json'}
+      - id: credit-ratings
+        request: {method: GET, url_template: 'https://www.indiabondinfo.nsdl.com/bds-service/v1/public/bdsinfo/credit-ratings?isin={isin_code}'}
+        response: {format: json, filename_template: '{isin_code}_credit-ratings.json'}

@@ -1,0 +1,536 @@
+openapi: 3.1.0
+info:
+  title: Data Processing Service — Upstream Admission API
+  version: 1.0.0
+  description: 'Design contract, not evidence of deployment. Submit an immutable S3
+    manifest reference in a CloudEvent. No application authentication initially; POST
+    is reachable only through the internal ALB in the shared VPC. Configure the deployment
+    base URL; / is a relative placeholder. Upstream success means HTTP 202 only; no
+    callback or mandatory polling. Public read API schemas are outside this admission
+    document. Stored S3 manifests retain the agreed CloudEvent with data.files; HTTP
+    events use data.manifest. Both carry matching dataset/event/run/input/fingerprint
+    metadata but have distinct CloudEvent ids. CloudEvents HTTP binding: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/bindings/http-protocol-binding.md
+    . Errors: https://www.rfc-editor.org/rfc/rfc9457.html .'
+servers:
+- url: /
+  description: Replace with the configured internal HTTPS processor origin; never
+    expose POST through the public read ALB.
+security: []
+paths:
+  /v1/event-ingestions:
+    post:
+      operationId: submitEventIngestion
+      summary: Durably accept a manifest for asynchronous processing
+      description: Validate only the HTTP event and idempotency at admission. Do not
+        read S3 on this request path. Worker reads manifest and files after admission;
+        missing objects, access failures, malformed manifest, checksum mismatch, or
+        conflicting metadata are processing-job errors and cannot retroactively change
+        HTTP 202. Compare stored and submitted dataschema, source, type, subject and
+        data schema_version/event_type/event_id/run_id/inputs/dataset_fingerprint;
+        ids and creation times need not match. Source is asserted metadata, not proof
+        of identity. Idempotency-Key must equal data.run_id. For replays compare the
+        whole parsed event independent of JSON whitespace and object-key order, preserving
+        scalar values and array order, including time and extension attributes. Persist
+        the original receipt and uniqueness of (source,id) and key atomically with
+        the job and dispatch intent. Timeouts and lost responses must be retried with
+        the original event and key. Never regenerate time/id on retry.
+      security: []
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        description: Delivery run ID, exactly equal to data.run_id; stable across
+          retries. Examples use run_101 for BSE and run_202 for NSDL.
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[A-Za-z0-9._:-]+$
+        example: run_202
+      requestBody:
+        required: true
+        description: Maximum 65536 bytes (64 KiB); UTF-8 JSON; no compression in v1.
+        content:
+          application/cloudevents+json:
+            schema:
+              $ref: '#/components/schemas/SubmissionEvent'
+            examples:
+              bse:
+                summary: BSE manifest submission
+                value:
+                  specversion: '1.0'
+                  id: urn:bond-platform:submission:run_101
+                  source: urn:bond-platform:service:data-fetch-service
+                  type: com.bondplatform.dataset.manifest.v1
+                  dataschema: urn:bond-platform:dataset:bse-debt-trades
+                  time: '2026-09-27T14:30:00Z'
+                  subject: exchange/BSE/trade-date/2026-09-21
+                  datacontenttype: application/json
+                  data:
+                    schema_version: 1
+                    event_type: daily-bhavcopy
+                    event_id: evt_bse
+                    run_id: run_101
+                    inputs:
+                      exchangeName: BSE
+                      tradeDate: '2026-09-21'
+                    manifest:
+                      bucket: data-fetch-service-artifacts
+                      key: runs/run_101/manifest.json
+                    dataset_fingerprint: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+              nsdl:
+                summary: NSDL manifest submission
+                value:
+                  specversion: '1.0'
+                  id: urn:bond-platform:submission:run_202
+                  source: urn:bond-platform:service:data-fetch-service
+                  type: com.bondplatform.dataset.manifest.v1
+                  dataschema: urn:bond-platform:dataset:nsdl-security
+                  time: '2026-09-27T14:30:00Z'
+                  subject: isin/INE121A07QY9
+                  datacontenttype: application/json
+                  data:
+                    schema_version: 1
+                    event_type: nsdl-bond-data
+                    event_id: evt_nsdl
+                    run_id: run_202
+                    inputs:
+                      isin_code: INE121A07QY9
+                    manifest:
+                      bucket: data-fetch-service-artifacts
+                      key: runs/run_202/manifest.json
+                    dataset_fingerprint: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      responses:
+        '202':
+          description: Request and dispatch intent committed durably to PostgreSQL
+            before replying. SQS publication may follow through the outbox. Same receipt
+            on idempotent replay; no new processing attempt. This does not certify
+            manifest/file validity or business completion.
+          headers:
+            Location:
+              required: true
+              description: Absolute URL of the public read-only processing job; identical
+                to statusUrl.
+              schema:
+                type: string
+                format: uri
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdmissionReceipt'
+              example:
+                jobId: 550e8400-e29b-41d4-a716-446655440000
+                status: ACCEPTED
+                eventId: urn:bond-platform:submission:run_202
+                runId: run_202
+                createdAt: '2026-09-27T14:31:00Z'
+                statusUrl: https://processing.kagent.app/v1/processing-jobs/550e8400-e29b-41d4-a716-446655440000
+        '400':
+          description: Malformed JSON, duplicate JSON keys, missing header, schema
+            violation, unsupported dataschema/version, or subject/input mismatch.
+            Correct the request before resubmitting.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: urn:bond-platform:problem:invalid-request
+                title: Invalid Request
+                status: 400
+                detail: Malformed JSON, duplicate JSON keys, missing header, schema
+                  violation, unsupported dataschema/version, or subject/input mismatch.
+                  Correct the request before resubmitting.
+                instance: urn:uuid:3df630b2-95d3-4f8f-8288-f7b0a1081b61
+                code: INVALID_REQUEST
+                correlationId: 3df630b2-95d3-4f8f-8288-f7b0a1081b61
+        '409':
+          description: An accepted Idempotency-Key or (source,id) is reused with different
+            semantic content, or the same event identity is presented under a different
+            run/key. Do not retry unchanged.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: urn:bond-platform:problem:idempotency-conflict
+                title: Idempotency Conflict
+                status: 409
+                detail: An accepted Idempotency-Key or (source,id) is reused with
+                  different semantic content, or the same event identity is presented
+                  under a different run/key. Do not retry unchanged.
+                instance: urn:uuid:3df630b2-95d3-4f8f-8288-f7b0a1081b61
+                code: IDEMPOTENCY_CONFLICT
+                correlationId: 3df630b2-95d3-4f8f-8288-f7b0a1081b61
+        '413':
+          description: HTTP request exceeds 65536 UTF-8 bytes. This limit is independent
+            of source file limits.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: urn:bond-platform:problem:request-too-large
+                title: Request Too Large
+                status: 413
+                detail: HTTP request exceeds 65536 UTF-8 bytes. This limit is independent
+                  of source file limits.
+                instance: urn:uuid:3df630b2-95d3-4f8f-8288-f7b0a1081b61
+                code: REQUEST_TOO_LARGE
+                correlationId: 3df630b2-95d3-4f8f-8288-f7b0a1081b61
+        '415':
+          description: Use application/cloudevents+json with UTF-8 encoding. Optional
+            charset=utf-8 is accepted. Binary and batch CloudEvents are unsupported.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: urn:bond-platform:problem:unsupported-media-type
+                title: Unsupported Media Type
+                status: 415
+                detail: Use application/cloudevents+json with UTF-8 encoding. Optional
+                  charset=utf-8 is accepted. Binary and batch CloudEvents are unsupported.
+                instance: urn:uuid:3df630b2-95d3-4f8f-8288-f7b0a1081b61
+                code: UNSUPPORTED_MEDIA_TYPE
+                correlationId: 3df630b2-95d3-4f8f-8288-f7b0a1081b61
+        '429':
+          description: Retry with the identical request and key after Retry-After,
+            within the upstream retry budget.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: urn:bond-platform:problem:admission-rate-limited
+                title: Admission Rate Limited
+                status: 429
+                detail: Retry with the identical request and key after Retry-After,
+                  within the upstream retry budget.
+                instance: urn:uuid:3df630b2-95d3-4f8f-8288-f7b0a1081b61
+                code: ADMISSION_RATE_LIMITED
+                correlationId: 3df630b2-95d3-4f8f-8288-f7b0a1081b61
+          headers:
+            Retry-After:
+              required: true
+              description: Delay in seconds before retry.
+              schema:
+                type: integer
+                minimum: 1
+        '500':
+          description: Outcome may be unknown; retry the identical request and key
+            within the upstream retry budget.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: urn:bond-platform:problem:internal-error
+                title: Internal Error
+                status: 500
+                detail: Outcome may be unknown; retry the identical request and key
+                  within the upstream retry budget.
+                instance: urn:uuid:3df630b2-95d3-4f8f-8288-f7b0a1081b61
+                code: INTERNAL_ERROR
+                correlationId: 3df630b2-95d3-4f8f-8288-f7b0a1081b61
+        '503':
+          description: Durable admission temporarily unavailable; retry identical
+            request and key after Retry-After, within the upstream retry budget.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: urn:bond-platform:problem:service-unavailable
+                title: Service Unavailable
+                status: 503
+                detail: Durable admission temporarily unavailable; retry identical
+                  request and key after Retry-After, within the upstream retry budget.
+                instance: urn:uuid:3df630b2-95d3-4f8f-8288-f7b0a1081b61
+                code: SERVICE_UNAVAILABLE
+                correlationId: 3df630b2-95d3-4f8f-8288-f7b0a1081b61
+          headers:
+            Retry-After:
+              required: true
+              description: Delay in seconds before retry.
+              schema:
+                type: integer
+                minimum: 1
+components:
+  schemas:
+    S3ManifestReference:
+      type: object
+      additionalProperties: false
+      required:
+      - bucket
+      - key
+      properties:
+        bucket:
+          type: string
+          minLength: 3
+          maxLength: 63
+        key:
+          type: string
+          minLength: 1
+          description: Exact immutable S3 object key; never a prefix. Maximum 1024
+            UTF-8 bytes.
+        version_id:
+          type: string
+          minLength: 1
+          description: Optional S3 version ID. When supplied, read exactly this version.
+      description: The producer must finish uploading before submission and must never
+        overwrite or delete the object while processing or retry may need it. Use
+        a run-specific key; version_id additionally pins an S3 version when versioning
+        is enabled.
+    BseInputs:
+      type: object
+      additionalProperties: false
+      required:
+      - exchangeName
+      - tradeDate
+      properties:
+        exchangeName:
+          type: string
+          const: BSE
+        tradeDate:
+          type: string
+          format: date
+    NsdlInputs:
+      type: object
+      additionalProperties: false
+      required:
+      - isin_code
+      properties:
+        isin_code:
+          type: string
+          minLength: 1
+          pattern: \S
+          description: Nonblank ISIN. Trim and uppercase for comparison with all listed
+            filenames; no checksum validation.
+    SubmissionData:
+      type: object
+      additionalProperties: false
+      required:
+      - schema_version
+      - event_type
+      - event_id
+      - run_id
+      - inputs
+      - manifest
+      - dataset_fingerprint
+      properties:
+        schema_version:
+          type: integer
+          const: 1
+        event_type:
+          type: string
+          enum:
+          - daily-bhavcopy
+          - nsdl-bond-data
+        event_id:
+          type: string
+          minLength: 1
+          description: Original fetch trigger identity; distinct from the outer CloudEvent
+            id.
+        run_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Delivery run identity; must equal Idempotency-Key.
+        inputs:
+          oneOf:
+          - $ref: '#/components/schemas/BseInputs'
+          - $ref: '#/components/schemas/NsdlInputs'
+        manifest:
+          $ref: '#/components/schemas/S3ManifestReference'
+        dataset_fingerprint:
+          type: string
+          pattern: ^sha256:[0-9a-f]{64}$
+      allOf:
+      - if:
+          properties:
+            event_type:
+              const: daily-bhavcopy
+        then:
+          properties:
+            inputs:
+              $ref: '#/components/schemas/BseInputs'
+        else:
+          properties:
+            inputs:
+              $ref: '#/components/schemas/NsdlInputs'
+    SubmissionEvent:
+      type: object
+      required:
+      - specversion
+      - id
+      - source
+      - type
+      - dataschema
+      - time
+      - subject
+      - datacontenttype
+      - data
+      properties:
+        specversion:
+          type: string
+          const: '1.0'
+        id:
+          type: string
+          minLength: 1
+          description: Unique within source. Stable across HTTP retries. Use urn:bond-platform:submission:<run_id>.
+            Distinct from the stored manifest CloudEvent id because the two events
+            contain different data.
+        source:
+          type: string
+          const: urn:bond-platform:service:data-fetch-service
+        type:
+          type: string
+          const: com.bondplatform.dataset.manifest.v1
+        dataschema:
+          type: string
+          enum:
+          - urn:bond-platform:dataset:bse-debt-trades
+          - urn:bond-platform:dataset:nsdl-security
+          description: Application dataset contract selector. These initial URNs are
+            immutable; incompatible contracts need new URNs.
+        time:
+          type: string
+          format: date-time
+        subject:
+          type: string
+          minLength: 1
+        datacontenttype:
+          type: string
+          const: application/json
+        data:
+          $ref: '#/components/schemas/SubmissionData'
+      additionalProperties:
+        type:
+        - string
+        - integer
+        - boolean
+      propertyNames:
+        pattern: ^[a-z0-9]+$
+      allOf:
+      - if:
+          properties:
+            dataschema:
+              const: urn:bond-platform:dataset:bse-debt-trades
+        then:
+          properties:
+            data:
+              properties:
+                event_type:
+                  const: daily-bhavcopy
+            subject:
+              pattern: ^exchange/BSE/trade-date/[0-9]{4}-[0-9]{2}-[0-9]{2}$
+        else:
+          properties:
+            data:
+              properties:
+                event_type:
+                  const: nsdl-bond-data
+            subject:
+              pattern: ^isin/\S+$
+      description: CloudEvents 1.0 structured JSON. This API profile carries a manifest
+        reference; the stored manifest carries files[]. Subject must match inputs
+        exactly after ISIN normalization. CloudEvents extension attributes are allowed;
+        data_base64 and batch mode are not supported.
+    AdmissionReceipt:
+      type: object
+      required:
+      - jobId
+      - status
+      - eventId
+      - runId
+      - createdAt
+      - statusUrl
+      properties:
+        jobId:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          const: ACCEPTED
+          description: Immutable admission outcome, not current worker state.
+        eventId:
+          type: string
+          minLength: 1
+          description: Outer submission CloudEvent id.
+        runId:
+          type: string
+          minLength: 1
+        createdAt:
+          type: string
+          format: date-time
+        statusUrl:
+          type: string
+          format: uri
+          description: Absolute public read-only job status URL. Status/read API schemas
+            are specified separately.
+      description: Persist this receipt at admission. Replays return the same receipt,
+        including when the job has finished. Response properties follow the processor
+        camelCase convention; external event data retains snake_case.
+    Problem:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      - detail
+      - instance
+      - code
+      - correlationId
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+          minLength: 1
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+          minLength: 1
+        instance:
+          type: string
+          format: uri-reference
+          description: Unique problem occurrence reference.
+        code:
+          type: string
+          minLength: 1
+        correlationId:
+          type: string
+          minLength: 1
+        errors:
+          type: array
+          items:
+            type: object
+            required:
+            - location
+            - code
+            - message
+            properties:
+              location:
+                type: string
+                enum:
+                - body
+                - header
+              pointer:
+                type: string
+                description: JSON Pointer into the request body, when applicable.
+              header:
+                type: string
+                description: Header name, when applicable.
+              code:
+                type: string
+                minLength: 1
+              message:
+                type: string
+                minLength: 1
+      description: RFC 9457 Problem Details. status equals the HTTP status. Do not
+        expose credentials, stack traces, or source file contents. Clients ignore
+        unknown response extensions.

@@ -1,0 +1,11 @@
+# PR 06: complete-event pull orchestration
+
+Base: `stack/05-acquisition` (`0d8cd94`). Branch: `stack/06-pull`.
+
+The Pull Lambda consumes run references from SQS, loads the immutable admitted snapshot, and claims its queued phase through the existing fenced coordinator. It runs at most the configured number of jobs in parallel using PR 05 acquisition. Each job gets an immutable result record. On a deterministic source failure it records a failed run; cancellation, expired execution budget, state persistence errors, and uncertain manifest/storage writes leave the claim for the PR 08 reconciler.
+
+Only a full set of validated job artifacts can create a CloudEvents manifest. BSE contributes one event-derived fgroup CSV with `exchangeName` and the pinned ISO `tradeDate`; NSDL contributes six ISIN JSON files. The archive is lineage, never a processing file. The fingerprint hashes dataset URN, event type, processing inputs, processor URL, and sorted job source/member/format/raw hash tuples. It ignores ZIP metadata, object keys, run IDs, timestamps and retry limits. The worker compares it with the latest HTTP-202 accepted baseline: unchanged runs skip delivery unless forced; changed or forced runs persist delivery intent and publish through the existing queue protocol.
+
+Unit tests use real state coordination with a conditional in-memory object backend. They cover BSE/NSDL completeness, force and baseline decisions, partial failures, claim fencing, canceled runs, result persistence failure, S3 upload failure, and pending delivery publication. A pull uses the source, disk, and S3 upload limits pinned at admission. The SQS adapter tests per-record retry, durable rejection of malformed messages, and verified stale claims. Pending admission and ownerless claim conflicts remain retryable. Failed-run history records stage, code, message, and manual retry guidance. `make check` passes with 2091/2197 unit statements covered (95.17%), race/static checks, existing separate mocked integration suites, native and Linux/arm64 builds, config/docs checks, and OpenAPI parity. Independent review evidence is recorded under `.reports/` for the final commit.
+
+PR 07 implements the processor HTTP call and acceptance. PR 08 repairs interrupted pull and delivery execution. No AWS deployment or live source call was made.

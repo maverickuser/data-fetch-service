@@ -1,0 +1,88 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main, 'stack/**']
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  GO_VERSION: '1.27.1'
+jobs:
+  compile:
+    name: Compile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - run: make build
+      - run: make configcheck
+
+  static-checks:
+    name: Lint, docs, and contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - run: make tools
+      - run: make lint
+      - run: make check-docs
+      - run: make check-contract
+
+  infrastructure:
+    name: Terraform validate and test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install pinned Terraform
+        run: |
+          curl -fsSLo terraform.zip https://releases.hashicorp.com/terraform/1.16.4/terraform_1.16.4_linux_amd64.zip
+          curl -fsSL https://releases.hashicorp.com/terraform/1.16.4/terraform_1.16.4_SHA256SUMS | grep ' terraform_1.16.4_linux_amd64.zip$' | sed 's/terraform_1.16.4_linux_amd64.zip/terraform.zip/' | sha256sum -c -
+          mkdir -p "$HOME/.local/bin" && unzip -o terraform.zip terraform -d "$HOME/.local/bin" && rm terraform.zip
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: make check-infra
+
+  unit-test:
+    name: Unit tests and coverage
+    needs: compile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - run: make test-unit
+      - run: make coverage-check
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: unit-coverage
+          path: .reports/unit.cover
+          include-hidden-files: true
+          if-no-files-found: warn
+
+  integration-test:
+    name: Mocked integration tests
+    needs: unit-test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - run: make test-integration
