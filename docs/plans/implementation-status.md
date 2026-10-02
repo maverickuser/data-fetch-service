@@ -1,6 +1,6 @@
 # Implementation status
 
-Branch: `stack/09-delivery-retry-api`. No remote PR or AWS resources created. Foundation committed as `e4bbe13`; its separate agent review covered staged content, not the committed head. PR 02 is approved through `cd31c10`, PR 03 through `8763839`, PR 04 through `eefd677`, PR 05 through `0d8cd94`, PR 06 through `d94ba82`, PR 07 through `a786f0c7`, PR 08 through `5e8c708`, and PR 09a through `78e2455`; exact-head local review records are under `.reports/`.
+Branch: `stack/09-api-telemetry`. No remote PR or AWS resources created. Foundation committed as `e4bbe13`; its separate agent review covered staged content, not the committed head. PR 02 is approved through `cd31c10`, PR 03 through `8763839`, PR 04 through `eefd677`, PR 05 through `0d8cd94`, PR 06 through `d94ba82`, PR 07 through `a786f0c7`, PR 08 through `5e8c708`, PR 09a through `78e2455`, and PR 09b through `5c24e5e`; exact-head local review records are under `.reports/`.
 
 | Increment | Status |
 |---|---|
@@ -13,7 +13,7 @@ Branch: `stack/09-delivery-retry-api`. No remote PR or AWS resources created. Fo
 | 07 Processor delivery and acceptance | Implemented locally; independent committed-head review approved under `.reports/` |
 | 08 Reconciler and automatic retries | Implemented locally; independent committed-head review approved under `.reports/` |
 | 09a Full rerun | Implemented locally; independent committed-head review approved under `.reports/` |
-| 09b Delivery retry | Implemented locally; independent committed-head review pending |
+| 09b Delivery retry | Implemented locally; independent committed-head review approved under `.reports/` |
 | 09c–12 | Planned; not implemented |
 
 Verified locally: gofmt/vet/staticcheck/errcheck; race/unit coverage greater than 95%; weighted-coverage regression checks; native and Linux/arm64 builds; configuration validation; documentation links; OpenAPI JSON/YAML parity. Current reports are in `.reports/`. CI YAML is prepared but has not run on GitHub.
@@ -36,6 +36,6 @@ PR 08 adds a bounded S3 cursor reconciler, recoverable expired ownership for pre
 
 PR 09a adds `POST /v1/runs/{run_id}/reruns`, cloning the original resolved snapshot into a linked run with a fresh request identity and optional force choice. The real HTTP-to-admission-to-state integration test verifies pinned BSE source URL/date, an idempotent replay, and active-run protection. `make check` passes 2847/2993 unit statements (95.12%) and the existing lint, integration, build, config, docs, and contract gates. See [the local PR description](full-rerun-pr.md). Independent committed-head review approved `78e2455`; evidence is under `.reports/pr09a-review.json`.
 
-PR 09b adds `POST /v1/runs/{run_id}/delivery-retries` for delivery-stage failures. It validates the retained complete files and acceptance baseline, creates a linked immutable child manifest, supports explicit current processor configuration, and runs a delivery-only Pull path without source requests or automatic source retries. A failed delivery retry can be retried again with idempotent replay while retaining the original raw-file provenance. Reconciliation resumes an interrupted delivery-only handoff without changing it to an unchanged-data skip. Missing artifacts return 410; a newer different accepted dataset blocks stale recovery. Unit tests keep the >95% gate separate from mocked HTTP-to-state-to-worker integration tests. `make check` passes 3128/3292 unit statements (95.02%) with race, integration, lint, native/Linux arm64 build, configuration, documentation, and OpenAPI parity checks. Independent committed-head re-review is pending after reviewer findings were fixed. See [the local PR description](delivery-retry-pr.md).
+PR 09b adds `POST /v1/runs/{run_id}/delivery-retries` for delivery-stage failures. It validates the retained complete files and acceptance baseline, creates a linked immutable child manifest, supports explicit current processor configuration, and runs a delivery-only Pull path without source requests or automatic source retries. A failed delivery retry can be retried again with idempotent replay while retaining the original raw-file provenance. Reconciliation resumes an interrupted delivery-only handoff without changing it to an unchanged-data skip. Missing artifacts return 410; a newer different accepted dataset blocks stale recovery. Unit tests keep the >95% gate separate from mocked HTTP-to-state-to-worker integration tests. `make check` passes 3128/3292 unit statements (95.02%) with race, integration, lint, native/Linux arm64 build, configuration, documentation, and OpenAPI parity checks. Independent committed-head review approved `5c24e5e`; evidence is under `.reports/pr09b-review.json`. See [the local PR description](delivery-retry-pr.md).
 
 Next: PR 09c API contract and telemetry completion, then Terraform and deployment work. Live AWS/source tests are deferred until release.
