@@ -186,3 +186,56 @@ func TestDeliveryRetryWorkerPreservesExpiryWhenTerminalCommitFails(t *testing.T)
 		t.Fatal(err)
 	}
 }
+
+func TestDeliveryRetryWorkerCanRetryFailedDeliveryRetry(t *testing.T) {
+	s, objects, publisher, uploads, reader, _ := retainedWorkerFixture(t)
+	var source events.Snapshot
+	if err := json.Unmarshal(objects.items["runs/parent/snapshot.json"].Data, &source); err != nil {
+		t.Fatal(err)
+	}
+	var sourceManifest Manifest
+	if err := json.Unmarshal(reader.manifests["runs/parent/manifest.json"], &sourceManifest); err != nil {
+		t.Fatal(err)
+	}
+	firstRaw, err := events.CloneForDeliveryRetry(source, "retry1", "first", nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first events.Snapshot
+	if err := json.Unmarshal(firstRaw, &first); err != nil {
+		t.Fatal(err)
+	}
+	firstManifest, err := ReuseManifest(source, first, sourceManifest, "artifacts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRaw, err := events.CloneForDeliveryRetry(first, "run", "second", nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var second events.Snapshot
+	if err := json.Unmarshal(secondRaw, &second); err != nil {
+		t.Fatal(err)
+	}
+	secondManifest, err := ReuseManifest(first, second, firstManifest, "artifacts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ParentRunID != "retry1" || second.DeliveryRetry.SourceRunID != "parent" || secondManifest.Data.Files[0].Key != sourceManifest.Data.Files[0].Key {
+		t.Fatal(second, secondManifest)
+	}
+	firstBytes, _ := MarshalManifest(firstManifest)
+	secondBytes, _ := MarshalManifest(secondManifest)
+	reader.manifests["runs/retry1/manifest.json"] = firstBytes
+	reader.manifests["runs/run/manifest.json"] = secondBytes
+	objects.items["runs/run/snapshot.json"] = state.Object{Data: secondRaw, Modified: objects.clock}
+	if err := s.Repository.Create(context.Background(), "runs/retry1/snapshot.json", firstRaw); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Run(context.Background(), "run", "worker", s.Now().Add(15*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if *uploads != 0 || len(publisher.messages) != 1 || publisher.messages[0] != "delivery:run" {
+		t.Fatal(*uploads, publisher.messages)
+	}
+}

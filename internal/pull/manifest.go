@@ -117,7 +117,11 @@ func BuildManifest(snapshot events.Snapshot, results []acquisition.Result, bucke
 
 // ReuseManifest validates every original file against its admitted job before creating a child manifest.
 func ReuseManifest(parent, child events.Snapshot, original Manifest, bucket string) (Manifest, error) {
-	if child.DeliveryRetry == nil || child.DeliveryRetry.SourceRunID != parent.RunID || child.ParentRunID != parent.RunID || child.ExecutionKey != parent.ExecutionKey || child.Event.EventType != parent.Event.EventType || !reflect.DeepEqual(child.Jobs, parent.Jobs) || !reflect.DeepEqual(child.Inputs, parent.Inputs) || child.Force != parent.Force || original.Data.RunID != parent.RunID {
+	sourceRunID := parent.RunID
+	if parent.DeliveryRetry != nil {
+		sourceRunID = parent.DeliveryRetry.SourceRunID
+	}
+	if sourceRunID == "" || child.DeliveryRetry == nil || child.DeliveryRetry.SourceRunID != sourceRunID || child.ParentRunID != parent.RunID || child.ExecutionKey != parent.ExecutionKey || child.Event.EventType != parent.Event.EventType || !reflect.DeepEqual(child.Jobs, parent.Jobs) || !reflect.DeepEqual(child.Inputs, parent.Inputs) || child.Force != parent.Force || original.Data.RunID != parent.RunID {
 		return Manifest{}, fmt.Errorf("delivery retry source differs from admitted parent")
 	}
 	byJob := make(map[string]configFile, len(parent.Jobs))
@@ -132,13 +136,17 @@ func ReuseManifest(parent, child events.Snapshot, original Manifest, bucket stri
 		}
 		results = append(results, acquisition.Result{JobID: file.JobID, Filename: job.filename, Format: job.format, Artifact: acquisition.Artifact{Key: file.Key, Bytes: file.SizeBytes, SHA256: file.SHA256}})
 	}
-	verified, err := BuildManifest(parent, results, bucket)
+	checking := parent
+	checking.RunID = sourceRunID
+	verified, err := BuildManifest(checking, results, bucket)
+	verified.ID = "urn:bond-platform:manifest:" + parent.RunID
+	verified.Data.RunID = parent.RunID
 	if err != nil || !reflect.DeepEqual(verified, original) {
 		return Manifest{}, fmt.Errorf("original manifest differs from admitted source")
 	}
 	// BuildManifest checks the source run's raw-key prefix; only the new manifest lives under the child run.
 	building := child
-	building.RunID = parent.RunID
+	building.RunID = sourceRunID
 	manifest, err := BuildManifest(building, results, bucket)
 	if err != nil {
 		return Manifest{}, err

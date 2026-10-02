@@ -183,7 +183,7 @@ func (s *Service) Run(ctx context.Context, runID, token string, deadline time.Ti
 
 // reuse verifies the pinned child manifest and all retained files without making source requests.
 func (s *Service) reuse(ctx context.Context, key string, lease state.Lease, child events.Snapshot, now func() time.Time) error {
-	if s.ArtifactReader == nil || child.DeliveryRetry.SourceRunID != child.ParentRunID {
+	if s.ArtifactReader == nil || child.DeliveryRetry.SourceRunID == "" {
 		return state.ErrIntegrity
 	}
 	parentObject, err := s.Repository.Read(ctx, "runs/"+child.ParentRunID+"/snapshot.json", now())

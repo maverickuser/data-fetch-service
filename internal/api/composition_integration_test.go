@@ -173,6 +173,61 @@ func TestHTTPCompositionDeliveryRetryReusesRetainedFiles(t *testing.T) {
 	}
 }
 
+func TestHTTPCompositionDeliveryRetryOfFailedDeliveryRetry(t *testing.T) {
+	h, service, objects, queue, artifacts, source := retryComposition(t)
+	if got := call(h, "POST", "/v1/runs/root/delivery-retries", `{}`); got.Code != 202 {
+		t.Fatal(got.Code, got.Body.String())
+	}
+	worker := &pull.Service{Repository: state.New(objects), Coordinator: service.Coordinator.(*state.Coordinator), Fetcher: integrationFetch(func(context.Context, string, config.ResolvedJob) (acquisition.Result, error) {
+		t.Fatal("source fetched")
+		return acquisition.Result{}, nil
+	}), ManifestStorage: artifacts, ArtifactReader: artifacts, Publisher: queue, ArtifactBucket: "artifacts", Now: service.Now}
+	if err := worker.Run(context.Background(), "child", "worker-first", service.Now().Add(15*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	coord := service.Coordinator.(*state.Coordinator)
+	key := "coordination/" + source.ExecutionKey + ".json"
+	lease, err := coord.ClaimDispatched(context.Background(), key, "child", "delivery", "delivery-first", service.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coord.Commit(context.Background(), key, lease, state.Transition{RunID: "child", Sequence: 5, Phase: domain.Failed, At: service.Now(), Details: json.RawMessage(`{"stage":"delivery","code":"PROCESSOR_UNAVAILABLE"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	service.NewID = func() string { return "grandchild" }
+	request := httptest.NewRequest("POST", "/v1/runs/child/delivery-retries", strings.NewReader(`{}`))
+	request.Header.Set("Idempotency-Key", "second-retry")
+	response := httptest.NewRecorder()
+	h.Routes().ServeHTTP(response, request)
+	if response.Code != 202 {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	view, err := h.Coordinator.ReadRun(context.Background(), "grandchild")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot events.Snapshot
+	if err := json.Unmarshal(view.Snapshot, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ParentRunID != "child" || snapshot.DeliveryRetry == nil || snapshot.DeliveryRetry.SourceRunID != "root" {
+		t.Fatal(snapshot)
+	}
+	var manifest pull.Manifest
+	if err := json.Unmarshal(artifacts.data["runs/grandchild/manifest.json"], &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Data.Files[0].Key != "runs/root/raw/"+source.Jobs[0].ID+"/"+source.Jobs[0].Filename {
+		t.Fatal(manifest)
+	}
+	if err := worker.Run(context.Background(), "grandchild", "worker-second", service.Now().Add(15*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if queue.runs[len(queue.runs)-1] != "delivery:grandchild" {
+		t.Fatal(queue.runs)
+	}
+}
+
 func TestHTTPCompositionDeliveryRetryExpiryAndStaleBaseline(t *testing.T) {
 	h, service, objects, _, artifacts, parent := retryComposition(t)
 	fileKey := "runs/root/raw/" + parent.Jobs[0].ID + "/" + parent.Jobs[0].Filename

@@ -230,7 +230,7 @@ func (s *Service) resumeDownloaded(ctx context.Context, key string, current stat
 		return state.ErrIntegrity
 	}
 	phase := domain.DeliveryPending
-	if !snapshot.Force && current.AcceptedBaseline != nil && current.AcceptedBaseline.Fingerprint == details.Fingerprint {
+	if snapshot.DeliveryRetry == nil && !snapshot.Force && current.AcceptedBaseline != nil && current.AcceptedBaseline.Fingerprint == details.Fingerprint {
 		phase = domain.SkippedUnchanged
 	}
 	if err := s.Coordinator.Commit(ctx, key, lease, state.Transition{RunID: lease.RunID, Sequence: current.LastSequence + 1, Phase: phase, At: s.Now().UTC(), Details: completed.Details}); err != nil {

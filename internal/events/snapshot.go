@@ -42,8 +42,15 @@ type DeliveryRetry struct {
 
 // CloneForDeliveryRetry keeps resolved source jobs while selecting a processor profile explicitly.
 func CloneForDeliveryRetry(parent Snapshot, runID, requestID string, current *config.Config, baselineRunID string) ([]byte, error) {
-	if parent.SchemaVersion != 1 || parent.RunID == "" || parent.ExecutionKey == "" || len(parent.Jobs) == 0 || runID == "" || runID == parent.RunID || requestID == "" || parent.DeliveryRetry != nil {
+	if parent.SchemaVersion != 1 || parent.RunID == "" || parent.ExecutionKey == "" || len(parent.Jobs) == 0 || runID == "" || runID == parent.RunID || requestID == "" {
 		return nil, fmt.Errorf("invalid delivery retry snapshot")
+	}
+	sourceRunID := parent.RunID
+	if parent.DeliveryRetry != nil {
+		sourceRunID = parent.DeliveryRetry.SourceRunID
+		if sourceRunID == "" {
+			return nil, fmt.Errorf("missing retained source run")
+		}
 	}
 	child := parent
 	child.RunID = runID
@@ -53,7 +60,7 @@ func CloneForDeliveryRetry(parent Snapshot, runID, requestID string, current *co
 	child.Event.Source = "urn:bond-platform:delivery-retry:" + parent.RunID
 	child.Event.EventID = requestID
 	child.Event.Original = nil
-	child.DeliveryRetry = &DeliveryRetry{SourceRunID: parent.RunID, UseCurrentProcessor: current != nil, ExpectedBaselineRunID: baselineRunID, OldConfigRevision: parent.ConfigRevision, OldProcessorURL: parent.Config.Processor.URL}
+	child.DeliveryRetry = &DeliveryRetry{SourceRunID: sourceRunID, UseCurrentProcessor: current != nil, ExpectedBaselineRunID: baselineRunID, OldConfigRevision: parent.ConfigRevision, OldProcessorURL: parent.Config.Processor.URL}
 	if current != nil {
 		child.Config.Processor = current.Processor
 		if err := child.Config.Validate(); err != nil {

@@ -432,31 +432,37 @@ func TestReconcilerRequeuesExpiredPreworkClaims(t *testing.T) {
 
 func TestReconcilerFinishesPostDownloadDecision(t *testing.T) {
 	for _, unchanged := range []bool{false, true} {
-		svc, repo, coord, _ := testService()
-		svc.PageLimit = 10
-		key := "coordination/exec.json"
-		repo.objects[key] = state.Object{Data: []byte("{}")}
-		fingerprint := "sha256:abc"
-		current := state.Coordination{ActiveRunID: "run", Phase: domain.DownloadsCompleted, LastSequence: 3, OwnerToken: "old", OwnerDeadline: testNow.Add(-time.Minute)}
-		if unchanged {
-			current.AcceptedBaseline = &state.Baseline{Fingerprint: fingerprint}
-		}
-		coord.runs[key] = current
-		snapshot, _ := json.Marshal(events.Snapshot{SchemaVersion: 1, RunID: "run", ExecutionKey: "exec"})
-		repo.objects["runs/run/snapshot.json"] = state.Object{Data: snapshot}
-		transition, _ := json.Marshal(state.Transition{RunID: "run", Phase: domain.DownloadsCompleted, Details: json.RawMessage(`{"dataset_fingerprint":"sha256:abc"}`)})
-		repo.objects["runs/run/history/00000000000000000003.json"] = state.Object{Data: transition}
-		ctx, cancel := recoveryContext()
-		err := svc.Run(ctx)
-		cancel()
-		want := domain.DeliveryPending
-		publish := 1
-		if unchanged {
-			want = domain.SkippedUnchanged
-			publish = 0
-		}
-		if err != nil || len(coord.commits) != 1 || coord.commits[0].Phase != want || coord.publish != publish {
-			t.Fatal(unchanged, err, coord)
+		for _, deliveryRetry := range []bool{false, true} {
+			svc, repo, coord, _ := testService()
+			svc.PageLimit = 10
+			key := "coordination/exec.json"
+			repo.objects[key] = state.Object{Data: []byte("{}")}
+			fingerprint := "sha256:abc"
+			current := state.Coordination{ActiveRunID: "run", Phase: domain.DownloadsCompleted, LastSequence: 3, OwnerToken: "old", OwnerDeadline: testNow.Add(-time.Minute)}
+			if unchanged {
+				current.AcceptedBaseline = &state.Baseline{Fingerprint: fingerprint}
+			}
+			coord.runs[key] = current
+			pinned := events.Snapshot{SchemaVersion: 1, RunID: "run", ExecutionKey: "exec"}
+			if deliveryRetry {
+				pinned.DeliveryRetry = &events.DeliveryRetry{SourceRunID: "source"}
+			}
+			snapshot, _ := json.Marshal(pinned)
+			repo.objects["runs/run/snapshot.json"] = state.Object{Data: snapshot}
+			transition, _ := json.Marshal(state.Transition{RunID: "run", Phase: domain.DownloadsCompleted, Details: json.RawMessage(`{"dataset_fingerprint":"sha256:abc"}`)})
+			repo.objects["runs/run/history/00000000000000000003.json"] = state.Object{Data: transition}
+			ctx, cancel := recoveryContext()
+			err := svc.Run(ctx)
+			cancel()
+			want := domain.DeliveryPending
+			publish := 1
+			if unchanged && !deliveryRetry {
+				want = domain.SkippedUnchanged
+				publish = 0
+			}
+			if err != nil || len(coord.commits) != 1 || coord.commits[0].Phase != want || coord.publish != publish {
+				t.Fatal(unchanged, deliveryRetry, err, coord)
+			}
 		}
 	}
 }

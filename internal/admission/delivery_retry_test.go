@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -209,5 +210,47 @@ func TestDeliveryRetryReplayKeepsOriginalBytes(t *testing.T) {
 	second, err := s.DeliveryRetry(context.Background(), "parent", "retry-key", false)
 	if err != nil || !second.Reused || second.RunID != first.RunID || !bytes.Equal(repo.captured.Snapshot, repo.existing.Snapshot) {
 		t.Fatal(second, err)
+	}
+}
+
+func TestDeliveryRetryOfFailedRetryKeepsOriginalRawFiles(t *testing.T) {
+	s, repo, artifacts, original, _ := deliveryFixture(t)
+	source := original
+	source.RunID = "source"
+	sourceKey := strings.Replace(artifacts.fileKey, "runs/parent/", "runs/source/", 1)
+	hash := sha256.Sum256([]byte("csv rows"))
+	sourceManifest, err := pull.BuildManifest(source, []acquisition.Result{{JobID: source.Jobs[0].ID, Filename: source.Jobs[0].Filename, Format: source.Jobs[0].Format, Artifact: acquisition.Artifact{Key: sourceKey, Bytes: artifacts.fileSize, SHA256: hex.EncodeToString(hash[:])}}}, "artifacts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRaw, err := events.CloneForDeliveryRetry(source, "parent", "first", nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first events.Snapshot
+	if err := json.Unmarshal(firstRaw, &first); err != nil {
+		t.Fatal(err)
+	}
+	firstManifest, err := pull.ReuseManifest(source, first, sourceManifest, "artifacts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.parentView.Snapshot = firstRaw
+	artifacts.manifest, _ = pull.MarshalManifest(firstManifest)
+	artifacts.fileKey = sourceKey
+	result, err := s.DeliveryRetry(context.Background(), "parent", "second", false)
+	if err != nil || result.RunID != "child" {
+		t.Fatal(result, err)
+	}
+	var grandchild events.Snapshot
+	if err := json.Unmarshal(repo.captured.Snapshot, &grandchild); err != nil {
+		t.Fatal(err)
+	}
+	var manifest pull.Manifest
+	if err := json.Unmarshal(artifacts.uploaded, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if grandchild.ParentRunID != "parent" || grandchild.DeliveryRetry.SourceRunID != "source" || manifest.Data.Files[0].Key != sourceKey {
+		t.Fatal(grandchild, manifest)
 	}
 }
