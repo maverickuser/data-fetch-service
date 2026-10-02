@@ -18,7 +18,15 @@ func Correlation(ctx context.Context, reader SnapshotReader, runID string) strin
 	if reader == nil || runID == "" || runID == "." || runID == ".." || safe(runID) != runID {
 		return ""
 	}
-	object, err := reader.Read(ctx, "runs/"+runID+"/snapshot.json", time.Now())
+	if ctx.Err() != nil {
+		return ""
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < 250*time.Millisecond {
+		return ""
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+	object, err := reader.Read(lookupCtx, "runs/"+runID+"/snapshot.json", time.Now())
 	if err != nil {
 		return ""
 	}

@@ -58,7 +58,7 @@ func (i *Ingress) Handle(ctx context.Context, batch lambdaevents.SQSEvent) (lamb
 			response.BatchItemFailures = append(response.BatchItemFailures, lambdaevents.SQSBatchItemFailure{ItemIdentifier: record.MessageId})
 		}
 		correlation := ""
-		if i.Store != nil {
+		if i.Telemetry != nil && i.Store != nil {
 			correlation = telemetry.Correlation(ctx, i.Store, runID)
 		}
 		i.record(telemetry.Entry{Component: "admission", Operation: "consume", Outcome: outcome, RunID: runID, RequestKey: requestKey, RequestID: record.MessageId, Correlation: correlation})

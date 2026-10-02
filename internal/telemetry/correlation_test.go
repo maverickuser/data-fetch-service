@@ -56,3 +56,21 @@ func TestCorrelationUsesPinnedRootAndFailsClosed(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestCorrelationKeepsInvocationHeadroom(t *testing.T) {
+	reads := 0
+	blocking := snapshotReader(func(string) (state.Object, error) {
+		reads++
+		return state.Object{}, errors.New("unexpected read")
+	})
+	nearDeadline, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	if got := Correlation(nearDeadline, blocking, "run"); got != "" || reads != 0 {
+		t.Fatal(got, reads)
+	}
+	cancelled, stop := context.WithCancel(context.Background())
+	stop()
+	if got := Correlation(cancelled, blocking, "run"); got != "" || reads != 0 {
+		t.Fatal(got, reads)
+	}
+}

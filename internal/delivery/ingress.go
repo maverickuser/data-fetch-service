@@ -62,7 +62,9 @@ func (i *Ingress) Handle(ctx context.Context, batch lambdaevents.SQSEvent) (lamb
 			outcome = "retry"
 			response.BatchItemFailures = append(response.BatchItemFailures, lambdaevents.SQSBatchItemFailure{ItemIdentifier: record.MessageId})
 		}
-		i.record(telemetry.Entry{Component: "delivery", Operation: "consume", Outcome: outcome, RunID: envelope.RunID, RequestID: record.MessageId, Correlation: telemetry.Correlation(ctx, i.Store, envelope.RunID)})
+		if i.Telemetry != nil {
+			i.record(telemetry.Entry{Component: "delivery", Operation: "consume", Outcome: outcome, RunID: envelope.RunID, RequestID: record.MessageId, Correlation: telemetry.Correlation(ctx, i.Store, envelope.RunID)})
+		}
 	}
 	return response, nil
 }

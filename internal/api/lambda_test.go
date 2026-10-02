@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/maverickuser/data-fetch-service/internal/state"
 	"github.com/maverickuser/data-fetch-service/internal/telemetry"
 )
 
@@ -101,5 +103,26 @@ func TestLambdaTelemetryUsesDurableRunIdentity(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), `"run_id":"run_456"`) {
 		t.Fatal(logs.String())
+	}
+}
+
+type blockedSnapshotReader struct{}
+
+func (blockedSnapshotReader) Read(ctx context.Context, _ string, _ time.Time) (state.Object, error) {
+	<-ctx.Done()
+	return state.Object{}, ctx.Err()
+}
+
+func TestLambdaTelemetryTimeoutPreservesSuccessfulResponse(t *testing.T) {
+	var logs bytes.Buffer
+	adapter := Lambda{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"run_id":"child"}`))
+	}), Snapshots: blockedSnapshotReader{}, Telemetry: &telemetry.JSON{Output: &logs}}
+	event := events.APIGatewayV2HTTPRequest{RawPath: "/v1/runs/child"}
+	event.RequestContext.HTTP.Method = http.MethodGet
+	started := time.Now()
+	response, err := adapter.Handle(context.Background(), event)
+	if err != nil || response.StatusCode != 200 || time.Since(started) > 400*time.Millisecond || !strings.Contains(logs.String(), `"outcome":"completed"`) {
+		t.Fatal(response, err, time.Since(started), logs.String())
 	}
 }
