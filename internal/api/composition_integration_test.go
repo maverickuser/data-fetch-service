@@ -202,6 +202,13 @@ func TestHTTPCompositionDeliveryRetryOfFailedDeliveryRetry(t *testing.T) {
 	if response.Code != 202 {
 		t.Fatal(response.Code, response.Body.String())
 	}
+	replay := httptest.NewRequest("POST", "/v1/runs/child/delivery-retries", strings.NewReader(`{}`))
+	replay.Header.Set("Idempotency-Key", "second-retry")
+	replayed := httptest.NewRecorder()
+	h.Routes().ServeHTTP(replayed, replay)
+	if replayed.Code != 202 || !strings.Contains(replayed.Body.String(), `"reused":true`) {
+		t.Fatal(replayed.Code, replayed.Body.String())
+	}
 	view, err := h.Coordinator.ReadRun(context.Background(), "grandchild")
 	if err != nil {
 		t.Fatal(err)

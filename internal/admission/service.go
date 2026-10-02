@@ -75,7 +75,7 @@ func (s *Service) DeliveryRetry(ctx context.Context, parentRunID, key string, us
 	existing, err := s.Coordinator.ReadRequest(ctx, requestKey)
 	if err == nil {
 		var pinned events.Snapshot
-		if json.Unmarshal(existing.Snapshot, &pinned) != nil || pinned.DeliveryRetry == nil || pinned.DeliveryRetry.SourceRunID != parentRunID || pinned.DeliveryRetry.UseCurrentProcessor != useCurrent {
+		if json.Unmarshal(existing.Snapshot, &pinned) != nil || pinned.DeliveryRetry == nil || pinned.ParentRunID != parentRunID || pinned.DeliveryRetry.UseCurrentProcessor != useCurrent {
 			return Result{}, state.ErrIntegrity
 		}
 		return s.admitRecovery(ctx, existing, pinned.RunID, true)

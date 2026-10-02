@@ -253,4 +253,9 @@ func TestDeliveryRetryOfFailedRetryKeepsOriginalRawFiles(t *testing.T) {
 	if grandchild.ParentRunID != "parent" || grandchild.DeliveryRetry.SourceRunID != "source" || manifest.Data.Files[0].Key != sourceKey {
 		t.Fatal(grandchild, manifest)
 	}
+	repo.existing = repo.captured
+	replay, err := s.DeliveryRetry(context.Background(), "parent", "second", false)
+	if err != nil || replay.RunID != "child" || !replay.Reused {
+		t.Fatal(replay, err)
+	}
 }
