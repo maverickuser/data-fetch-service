@@ -2,12 +2,12 @@
 
 Two Terraform root modules, both pinned to Terraform `~> 1.16.4` and AWS provider `6.61.0`. Nothing here has been applied; see [implementation status](../docs/plans/implementation-status.md).
 
-- `bootstrap/`: the Terraform backend only — bucket `data-fetch-service-terraform-state` and lock table `data-fetch-service-terraform-lock`. Applied once with local state, outside the 30-day runtime lifecycle.
+- `bootstrap/`: the bucket `data-fetch-service-packages` that holds immutable Lambda release packages. The Terraform state bucket `data-fetch-service-terraform-state` is created by the release workflow before any Terraform runs, and state is locked with an S3 lock file, so there is no lock table.
 - `service/`: production runtime — buckets, three queues with DLQs, five VPC-attached Lambdas, the HTTP API at `fetch.kagent.app`, schedules, IAM, and alarms. It creates no VPC.
 
 ## Local checks
 
-`make check-infra TERRAFORM=/path/to/terraform` runs `fmt -check` and `validate` for both modules and the mocked `terraform test` suite for `service/` (`bootstrap/` has no tests). It needs network access to download the provider, but no AWS credentials. `service/tests/runtime.tftest.hcl` asserts queue visibility/retention/redrive, lifecycle prefixes, per-role queue publish/consume scope, artifact access, processor-route access, the schedule payload, staged activation defaults, and output names. Its only failing-case runs are a processor in another VPC and a processor endpoint that differs from the bundled configuration; the subnet, NAT-route, and endpoint preconditions are not exercised by a test, and the S3 endpoint-policy check is a substring match evaluated at apply.
+`make check-infra TERRAFORM=/path/to/terraform` runs `fmt -check`, `validate`, and the mocked `terraform test` suites for both modules. It needs network access to download the provider, but no AWS credentials. `service/tests/runtime.tftest.hcl` asserts queue visibility/retention/redrive, lifecycle prefixes, per-role queue publish/consume scope, artifact access, processor-route access, the schedule payload, staged activation defaults, and output names. Its only failing-case runs are a processor in another VPC and a processor endpoint that differs from the bundled configuration; the subnet, NAT-route, and endpoint preconditions are not exercised by a test, and the S3 endpoint-policy check is a substring match evaluated at apply.
 
 ## Apply order
 
@@ -15,14 +15,14 @@ Two Terraform root modules, both pinned to Terraform `~> 1.16.4` and AWS provide
 2. `data-processing-service` infrastructure.
 3. `bootstrap/`, then `service/`.
 
-Initialise the service backend with the bootstrap outputs:
+The manual `Release` workflow does all of this; see the [runbook](../docs/runbook.md). To initialise the service backend by hand:
 
 ```sh
 terraform -chdir=infra/service init \
   -backend-config=bucket=data-fetch-service-terraform-state \
   -backend-config=key=service/terraform.tfstate \
   -backend-config=region=ap-south-1 \
-  -backend-config=dynamodb_table=data-fetch-service-terraform-lock
+  -backend-config=use_lockfile=true
 ```
 
 ## Required remote-state outputs

@@ -21,7 +21,7 @@ Shared network (2026-10-02): the VPC now comes from the separate `cloud-platform
 | 09c API contracts and telemetry | Implemented locally; independent exact-head review approved under `.reports/` |
 | 10 Terraform runtime infrastructure | Implemented locally; not applied; reviewer-agent findings on `bb3c88d` fixed in `6de68d8`; re-review confirmed them resolved and raised one documentation correction, since applied |
 | 11 Release verification harness | Smoke runner and manual smoke workflow implemented locally; AWS integration and load workflows not implemented; reviewer-agent findings fixed, re-review not run |
-| 12 | Planned; not implemented |
+| 12 Release pipeline | Manual staged `Release` workflow, packaging, and runbook implemented; never run on GitHub; not reviewed |
 
 Verified locally: gofmt/vet/staticcheck/errcheck; race/unit coverage greater than 95%; weighted-coverage regression checks; native and Linux/arm64 builds; configuration validation; documentation links; OpenAPI JSON/YAML parity. Current reports are in `.reports/`. CI (`.github/workflows/quality.yml`) is defined for pull requests and pushes to `main` and `stack/**` as separate jobs: Compile, then Unit tests and coverage, then Mocked integration tests, with lint/docs/contract and Terraform checks alongside. It has no deployment job. All five jobs passed on GitHub for the stack head in pull request #1.
 
@@ -51,4 +51,6 @@ PR 10 adds the Terraform backend bootstrap and production runtime modules, SigV4
 
 PR 11 (partial) adds the real-endpoint smoke runner, tested only against a local fake deployment, and a `workflow_dispatch` smoke workflow that has never been run. A source HTTP 404 is now recorded as `SOURCE_NOT_FOUND`. `make check` passes 3557/3730 unit statements (95.36%) after the review fixes. See [the local PR description](live-verification-pr.md).
 
-Next: the remaining PR 11 items (disposable-resource AWS integration workflow, load/resource workflow), then PR 12 release pipeline. Live AWS/source tests are deferred until release.
+PR 12 adds `make package` (reproducible Lambda ZIPs), a bootstrap module for the package bucket, and a `workflow_dispatch` `Release` workflow with stages `package`, `plan`, and `apply`. The `plan` and `apply` stages cannot succeed until the processing service publishes its Terraform state. Nothing from this repository is deployed. See [the runbook](../runbook.md).
+
+Next: run the `package` stage, then the remaining PR 11 items (disposable-resource AWS integration workflow, load/resource workflow), and the first `plan` once the processor state exists. Live AWS/source tests are deferred until release.

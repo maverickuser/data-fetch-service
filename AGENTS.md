@@ -26,7 +26,7 @@ Keep current instructions and user-approved changes reflected in the LLD. Do not
 - `config/events.yaml`, `config/environments/prod.yaml`: version-controlled effective configuration.
 - `infra/bootstrap`, `infra/service`: separate Terraform backend bootstrap and production runtime resources.
 - `internal/smoke`, `cmd/smoke`: real-endpoint smoke runner, tested locally against a fake deployment.
-- `.github/workflows`: CI checks (`quality.yml`), the manual smoke workflow (`smoke.yml`), and the manual shared-network plan/apply (`network.yml`, calling `cloud-platform-network`); deployment and AWS integration workflows are planned, not present.
+- `.github/workflows`: CI checks (`quality.yml`), the manual smoke workflow (`smoke.yml`), the manual shared-network plan/apply (`network.yml`, calling `cloud-platform-network`), and the manual staged release (`release.yml`); the AWS integration and load workflows are planned, not present.
 
 Only claim a package or feature exists after inspecting the checkout; this map describes the target architecture during incremental implementation.
 
@@ -44,7 +44,8 @@ Implemented commands:
 - `make configcheck`: validate the effective event configuration and print its revision.
 - `make check-docs`: validate repository documentation links.
 - `make check-contract`: verify supplied OpenAPI JSON/YAML equivalence (Ruby standard library).
-- `make check-infra`: Terraform `fmt -check` and `validate` for `infra/bootstrap` and `infra/service`, plus mocked `terraform test` for `infra/service`; pass `TERRAFORM=` when the pinned 1.16.4 binary is not on `PATH`. Needs network for the provider, no AWS credentials.
+- `make check-infra`: Terraform `fmt -check`, `validate`, and mocked `terraform test` for `infra/bootstrap` and `infra/service`; pass `TERRAFORM=` when the pinned 1.16.4 binary is not on `PATH`. Needs network for the provider, no AWS credentials.
+- `make package`: build one reproducible `bootstrap`+config ZIP per Lambda under `dist/` and write `dist/release.json` with the configuration revision and base64 SHA-256 of each ZIP.
 - `make check`: run all implemented deterministic gates.
 
 Add configuration/Terraform/live-test commands as their implementations land and update this file in the same PR. A documented command must perform its advertised checks; never use success-returning placeholders. Local deterministic checks require no AWS credentials. Real AWS integration and production smoke tests run through the documented GitHub workflows using configured inputs.

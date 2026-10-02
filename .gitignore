@@ -3,3 +3,5 @@
 *.tfstate*
 .terraform/
 __pycache__/
+dist/
+*.tfplan

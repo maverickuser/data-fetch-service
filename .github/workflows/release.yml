@@ -1,0 +1,219 @@
+name: Release
+# Manual only. Nothing here runs on push or pull request.
+#   package: run the gates, build the Lambda packages, and upload them. Creates
+#            only the Terraform state bucket and the package bucket.
+#   plan:    also create or reuse the shared network and plan the service stack.
+#   apply:   also apply the plan and run the real-endpoint smoke suite.
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: How far to go
+        type: choice
+        options: [package, plan, apply]
+        default: package
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: release-prod
+  cancel-in-progress: false
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'ap-south-1' }}
+  STATE_BUCKET: data-fetch-service-terraform-state
+jobs:
+  gates:
+    name: Gates
+    uses: ./.github/workflows/quality.yml
+    permissions:
+      contents: read
+
+  package:
+    name: Build and upload packages
+    needs: gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: prod
+    outputs:
+      config_revision: ${{ steps.build.outputs.config_revision }}
+      package_sha256: ${{ steps.build.outputs.package_sha256 }}
+      package_bucket: ${{ steps.bootstrap.outputs.package_bucket }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - name: Install pinned Terraform
+        run: |
+          curl -fsSLo terraform.zip https://releases.hashicorp.com/terraform/1.16.4/terraform_1.16.4_linux_amd64.zip
+          curl -fsSL https://releases.hashicorp.com/terraform/1.16.4/terraform_1.16.4_SHA256SUMS | grep ' terraform_1.16.4_linux_amd64.zip$' | sed 's/terraform_1.16.4_linux_amd64.zip/terraform.zip/' | sha256sum -c -
+          mkdir -p "$HOME/.local/bin" && unzip -o terraform.zip terraform -d "$HOME/.local/bin" && rm terraform.zip
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Build packages
+        id: build
+        run: |
+          set -euo pipefail
+          make package
+          echo "config_revision=$(jq -r .config_revision dist/release.json)" >> "$GITHUB_OUTPUT"
+          echo "package_sha256=$(jq -c .package_sha256 dist/release.json)" >> "$GITHUB_OUTPUT"
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Ensure the Terraform state bucket exists
+        run: |
+          set -euo pipefail
+          account=$(aws sts get-caller-identity --query Account --output text)
+          # Capture the result first: with pipefail, piping a failing command into grep always fails.
+          if probe=$(aws s3api head-bucket --bucket "$STATE_BUCKET" --expected-bucket-owner "$account" 2>&1); then
+            echo "State bucket already exists."
+          elif grep -q '(404)' <<<"$probe"; then
+            echo "State bucket not found; creating it."
+            aws s3api create-bucket --bucket "$STATE_BUCKET" --region "$AWS_REGION" --create-bucket-configuration "LocationConstraint=$AWS_REGION"
+            aws s3api put-public-access-block --bucket "$STATE_BUCKET" --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+            aws s3api put-bucket-versioning --bucket "$STATE_BUCKET" --versioning-configuration Status=Enabled
+            aws s3api put-bucket-encryption --bucket "$STATE_BUCKET" --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+          else
+            echo "$probe"
+            echo "::error::Bucket $STATE_BUCKET exists but is not owned by this account or is not accessible. Agree a different name; none is chosen automatically."
+            exit 1
+          fi
+      - name: Apply the package bucket
+        id: bootstrap
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra/bootstrap init -input=false -lockfile=readonly -backend-config="bucket=$STATE_BUCKET" -backend-config="key=bootstrap/terraform.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true"
+          terraform -chdir=infra/bootstrap apply -input=false -auto-approve -lock-timeout=10m -var "aws_region=$AWS_REGION"
+          echo "package_bucket=$(terraform -chdir=infra/bootstrap output -raw package_bucket)" >> "$GITHUB_OUTPUT"
+      - name: Upload immutable packages
+        env:
+          PACKAGE_BUCKET: ${{ steps.bootstrap.outputs.package_bucket }}
+          CONFIG_REVISION: ${{ steps.build.outputs.config_revision }}
+        run: |
+          set -euo pipefail
+          prefix="releases/${GITHUB_SHA}/${CONFIG_REVISION/:/-}"
+          for kind in api admission pull delivery reconciler; do
+            key="$prefix/$kind.zip"
+            local_hash=$(jq -r ".package_sha256.$kind" dist/release.json)
+            if remote=$(aws s3api head-object --bucket "$PACKAGE_BUCKET" --key "$key" --checksum-mode ENABLED --query ChecksumSHA256 --output text 2>/dev/null); then
+              if [ "$remote" != "$local_hash" ]; then
+                echo "::error::$key already exists with different content; a release package is never overwritten."
+                exit 1
+              fi
+              echo "$key already uploaded."
+            else
+              aws s3api put-object --bucket "$PACKAGE_BUCKET" --key "$key" --body "dist/$kind.zip" --checksum-algorithm SHA256 --checksum-sha256 "$local_hash" >/dev/null
+              echo "Uploaded $key."
+            fi
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-manifest
+          path: dist/release.json
+
+  network:
+    name: Shared network
+    if: ${{ inputs.stage != 'package' }}
+    needs: package
+    # Pinned to main until the network repository publishes its first version tag.
+    uses: maverickuser/cloud-platform-network/.github/workflows/apply.yml@main
+    with:
+      network_ref: main
+      aws_region: ${{ vars.AWS_REGION || 'ap-south-1' }}
+      apply: true
+    secrets:
+      AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+
+  deploy:
+    name: Plan and apply service
+    if: ${{ inputs.stage != 'package' }}
+    needs: [package, network]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: prod
+    env:
+      TF_VAR_aws_region: ${{ vars.AWS_REGION || 'ap-south-1' }}
+      TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
+      TF_VAR_processor_state_bucket: ${{ vars.PROCESSOR_STATE_BUCKET }}
+      TF_VAR_processor_state_key: ${{ vars.PROCESSOR_STATE_KEY }}
+      TF_VAR_deployment_commit: ${{ github.sha }}
+      TF_VAR_config_revision: ${{ needs.package.outputs.config_revision }}
+      TF_VAR_package_bucket: ${{ needs.package.outputs.package_bucket }}
+      TF_VAR_package_sha256: ${{ needs.package.outputs.package_sha256 }}
+      TF_VAR_enable_ingress_consumption: ${{ vars.ENABLE_INGRESS_CONSUMPTION || 'false' }}
+      TF_VAR_enable_bse_schedule: ${{ vars.ENABLE_BSE_SCHEDULE || 'false' }}
+      TF_VAR_external_producer_role_arns: ${{ vars.EXTERNAL_PRODUCER_ROLE_ARNS || '[]' }}
+      TF_VAR_processor_reader_role_arns: ${{ vars.PROCESSOR_READER_ROLE_ARNS || '[]' }}
+    outputs:
+      api_url: ${{ steps.outputs.outputs.api_url }}
+      ingress_queue_url: ${{ steps.outputs.outputs.ingress_queue_url }}
+      artifact_bucket: ${{ steps.outputs.outputs.artifact_bucket }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Preflight configuration
+        run: |
+          missing=0
+          for name in TF_VAR_hosted_zone_id TF_VAR_processor_state_bucket TF_VAR_processor_state_key; do
+            if [ -z "${!name}" ]; then echo "::error::Repository variable for ${name#TF_VAR_} is not configured"; missing=1; fi
+          done
+          exit "$missing"
+      - name: Install pinned Terraform
+        run: |
+          curl -fsSLo terraform.zip https://releases.hashicorp.com/terraform/1.16.4/terraform_1.16.4_linux_amd64.zip
+          curl -fsSL https://releases.hashicorp.com/terraform/1.16.4/terraform_1.16.4_SHA256SUMS | grep ' terraform_1.16.4_linux_amd64.zip$' | sed 's/terraform_1.16.4_linux_amd64.zip/terraform.zip/' | sha256sum -c -
+          mkdir -p "$HOME/.local/bin" && unzip -o terraform.zip terraform -d "$HOME/.local/bin" && rm terraform.zip
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Terraform init
+        run: terraform -chdir=infra/service init -input=false -lockfile=readonly -backend-config="bucket=$STATE_BUCKET" -backend-config="key=service/terraform.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true"
+      - name: Terraform plan
+        run: terraform -chdir=infra/service plan -input=false -lock-timeout=10m -out=service.tfplan
+      - name: Terraform apply
+        if: ${{ inputs.stage == 'apply' }}
+        run: terraform -chdir=infra/service apply -input=false -lock-timeout=10m service.tfplan
+      - name: Read deployment outputs
+        id: outputs
+        if: ${{ inputs.stage == 'apply' }}
+        run: |
+          set -euo pipefail
+          for name in api_url ingress_queue_url artifact_bucket; do
+            echo "$name=$(terraform -chdir=infra/service output -raw "$name")" >> "$GITHUB_OUTPUT"
+          done
+
+  smoke:
+    name: Real-endpoint smoke suite
+    if: ${{ inputs.stage == 'apply' }}
+    needs: deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment: prod
+    env:
+      SMOKE_API_URL: ${{ needs.deploy.outputs.api_url }}
+      SMOKE_INGRESS_QUEUE_URL: ${{ needs.deploy.outputs.ingress_queue_url }}
+      SMOKE_ARTIFACT_BUCKET: ${{ needs.deploy.outputs.artifact_bucket }}
+      SMOKE_NSDL_ISIN: ${{ vars.SMOKE_NSDL_ISIN }}
+      SMOKE_BSE_FALLBACK_WEEKDAYS: ${{ vars.SMOKE_BSE_FALLBACK_WEEKDAYS || '3' }}
+      SMOKE_COMMIT: ${{ github.sha }}
+      SMOKE_SUITE_ID: release-${{ github.run_id }}-${{ github.run_attempt }}
+      SMOKE_REPORT_PATH: smoke-report.json
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: go run ./cmd/smoke
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: smoke-report
+          path: smoke-report.json
+          if-no-files-found: warn
