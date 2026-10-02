@@ -2,6 +2,8 @@
 
 Branch: `stack/10-infrastructure`. No remote PR or AWS resources created. Foundation committed as `e4bbe13`; its separate agent review covered staged content, not the committed head. PR 02 is approved through `cd31c10`, PR 03 through `8763839`, PR 04 through `eefd677`, PR 05 through `0d8cd94`, PR 06 through `d94ba82`, PR 07 through `a786f0c7`, PR 08 through `5e8c708`, PR 09a through `78e2455`, PR 09b through `5c24e5e`, and PR 09c through `6aea1ce`; exact-head local review records are under `.reports/`.
 
+History note (2026-10-02): before the first push, the stack's commits were rewritten to remove a deployment role ARN from two documents; no code changed. Hashes cited in this file, in the PR descriptions, and in `.reports/` are the pre-rewrite hashes. Reviewed heads map as: `e4bbe13`→`8afc06c`, `cd31c10`→`68dc1cc`, `8763839`→`4c09853`, `eefd677`→`33ba3c8`, `0d8cd94`→`e3246a7`, `d94ba82`→`d60c3e3`, `a786f0c7`→`eaa1856`, `5e8c708`→`1aa8758`, `78e2455`→`98b0fee`, `5c24e5e`→`01eec01`, `6aea1ce`→`ac26473`.
+
 | Increment | Status |
 |---|---|
 | 01 Foundation | Implemented locally; separate agent reviewed staged content with no blockers |
