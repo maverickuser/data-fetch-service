@@ -3,7 +3,7 @@ GOFMT ?= gofmt
 TERRAFORM ?= terraform
 STATICCHECK ?= staticcheck
 ERRCHECK ?= errcheck
-.PHONY: fmt lint test-unit test-integration coverage-check build configcheck check check-docs check-contract check-infra
+.PHONY: fmt lint test-unit test-integration coverage-check build configcheck check check-docs check-contract check-infra package
 fmt:
 	$(GO) fmt ./...
 lint:
@@ -29,10 +29,13 @@ configcheck:
 	$(GO) run ./cmd/configcheck -config config/events.yaml
 check-docs:
 	python3 scripts/check_docs.py
+package:
+	GO="$(GO)" scripts/package.sh dist
 check-infra:
 	$(TERRAFORM) fmt -check -recursive infra
 	$(TERRAFORM) -chdir=infra/bootstrap init -backend=false -input=false -lockfile=readonly
 	$(TERRAFORM) -chdir=infra/bootstrap validate
+	$(TERRAFORM) -chdir=infra/bootstrap test
 	$(TERRAFORM) -chdir=infra/service init -backend=false -input=false -lockfile=readonly
 	$(TERRAFORM) -chdir=infra/service validate
 	$(TERRAFORM) -chdir=infra/service test

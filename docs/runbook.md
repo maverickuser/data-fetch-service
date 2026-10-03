@@ -1,0 +1,43 @@
+# Runbook
+
+How to release and operate the deployed service. As of the last update to the [implementation status](plans/implementation-status.md), no release has been applied; steps below that depend on a deployment are written from the design and have not been exercised.
+
+## Releasing
+
+Everything runs from the manual `Release` workflow (Actions → Release → Run workflow) on `main`. It never starts on push or pull request. Pick a stage:
+
+| Stage | What it does | What it creates in AWS |
+|---|---|---|
+| `package` | Runs all CI gates, builds the five Lambda ZIPs, uploads them | State bucket `data-fetch-service-terraform-state`, package bucket `data-fetch-service-packages`, five objects under `releases/{commit}/{config revision}/` |
+| `plan` | The above, then creates or reuses the shared network and plans the service stack | The shared network (billed hourly) if it does not exist |
+| `apply` | The above, then applies the plan and runs the smoke suite | The whole service |
+
+A package is never overwritten: re-running a commit re-uses its objects, and a differing ZIP under the same key fails the run.
+
+Required repository configuration:
+
+- Secret `AWS_ROLE_TO_ASSUME`.
+- Variables `HOSTED_ZONE_ID`, `PROCESSOR_STATE_BUCKET`, `PROCESSOR_STATE_KEY` (needed from `plan` onward), `SMOKE_NSDL_ISIN` (needed for `apply`).
+- Optional variables: `AWS_REGION` (default `ap-south-1`), `ENABLE_INGRESS_CONSUMPTION` and `ENABLE_BSE_SCHEDULE` (default `false`), `EXTERNAL_PRODUCER_ROLE_ARNS` and `PROCESSOR_READER_ROLE_ARNS` (JSON lists, default `[]`), `SMOKE_BSE_FALLBACK_WEEKDAYS`.
+
+First rollout order: the processing service must be deployed first, because the service stack reads its endpoint and route from its Terraform state. Release with both activation switches `false`, set `processor.enabled: true` in `config/environments/prod.yaml` once the processor accepts submissions, then set `ENABLE_INGRESS_CONSUMPTION` and `ENABLE_BSE_SCHEDULE` to `true` and release again. The smoke suite's schedule check fails while `ENABLE_BSE_SCHEDULE` is `false`.
+
+A failed smoke suite fails the workflow. It does not undo the applied infrastructure.
+
+## Rolling back
+
+Code and configuration roll back together. Run `Release` at stage `apply` from the earlier commit (Run workflow → pick the tag or branch at that commit). Its packages are still in the package bucket, so the Lambdas return to exactly that build and configuration revision. Check the plan output before the apply step for anything other than Lambda code and environment changes.
+
+## Operating
+
+- **Failed run:** `GET /v1/runs/{run_id}` for the phase, `/history` for the failure stage and code, `/pulls` for per-job results.
+- **File not published (`SOURCE_NOT_FOUND`), for example an exchange holiday:** no automatic recovery. Submit a manual run for the date you want with `POST /v1/events/daily-bhavcopy/runs`.
+- **Pull failed for another reason:** `POST /v1/runs/{run_id}/reruns` repeats the whole event from its original snapshot and date.
+- **Delivery failed but files are stored:** `POST /v1/runs/{run_id}/delivery-retries` resubmits without downloading again. It returns `410` once the artifacts have expired (30 days); use a full rerun then.
+- **Automatic retries:** a crashed or timed-out pull is retried up to three times as linked child runs. Follow `latest_run_id` in the run detail.
+- **Dead-letter queues:** `data-fetch-service-{ingress,pull,delivery}-dlq`. A message there has failed five receives. Read its body for the run ID, check that run's state, and redrive to the source queue only after the cause is fixed; the handlers treat an already-finished run as stale and acknowledge it.
+- **Alarms:** queue oldest-message age, DLQ depth, handler retry outcomes, and Lambda errors. None has a notification target yet, so they must be watched in CloudWatch.
+
+## Removing the shared network
+
+The network is owned by `cloud-platform-network`. Its manual `Destroy network` workflow removes it; it will fail or strand this service while the Lambdas are still attached to the VPC, so destroy the service stack first.
