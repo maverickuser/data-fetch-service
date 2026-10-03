@@ -1,6 +1,6 @@
 # Runbook
 
-How to release and operate the deployed service. As of the last update to the [implementation status](plans/implementation-status.md), no release has been applied; steps below that depend on a deployment are written from the design and have not been exercised.
+How to release and operate the deployed service. As of the last update to the [implementation status](plans/implementation-status.md), only the `package` stage has run and no service has been applied; steps below that depend on a deployment are written from the design and have not been exercised.
 
 ## Releasing
 
