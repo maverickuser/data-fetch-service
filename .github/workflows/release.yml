@@ -74,6 +74,8 @@ jobs:
             aws s3api put-public-access-block --bucket "$STATE_BUCKET" --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
             aws s3api put-bucket-versioning --bucket "$STATE_BUCKET" --versioning-configuration Status=Enabled
             aws s3api put-bucket-encryption --bucket "$STATE_BUCKET" --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+            # A new bucket can take a minute to become visible to every S3 front end.
+            aws s3api wait bucket-exists --bucket "$STATE_BUCKET"
           else
             echo "$probe"
             echo "::error::Bucket $STATE_BUCKET exists but is not owned by this account or is not accessible. Agree a different name; none is chosen automatically."
@@ -83,7 +85,12 @@ jobs:
         id: bootstrap
         run: |
           set -euo pipefail
-          terraform -chdir=infra/bootstrap init -input=false -lockfile=readonly -backend-config="bucket=$STATE_BUCKET" -backend-config="key=bootstrap/terraform.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true"
+          for attempt in 1 2 3 4 5 6; do
+            if terraform -chdir=infra/bootstrap init -input=false -lockfile=readonly -backend-config="bucket=$STATE_BUCKET" -backend-config="key=bootstrap/terraform.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true"; then break; fi
+            if [ "$attempt" = 6 ]; then exit 1; fi
+            echo "Backend not ready (a new state bucket can take a minute); retrying in 20 seconds."
+            sleep 20
+          done
           terraform -chdir=infra/bootstrap apply -input=false -auto-approve -lock-timeout=10m -var "aws_region=$AWS_REGION"
           echo "package_bucket=$(terraform -chdir=infra/bootstrap output -raw package_bucket)" >> "$GITHUB_OUTPUT"
       - name: Upload immutable packages
