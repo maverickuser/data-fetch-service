@@ -1,0 +1,43 @@
+name: AWS integration
+# Manual only. Creates a disposable bucket and queue named after this run,
+# runs the `aws`-tagged tests against them, and always deletes them.
+# It never touches production buckets or queues.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  verify:
+    name: Disposable-resource tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'ap-south-1' }}
+      AWS_VERIFY_BUCKET: data-fetch-service-verify-${{ github.run_id }}-${{ github.run_attempt }}
+      QUEUE_NAME: data-fetch-service-verify-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Create disposable resources
+        run: |
+          set -euo pipefail
+          aws s3api create-bucket --bucket "$AWS_VERIFY_BUCKET" --region "$AWS_REGION" --create-bucket-configuration "LocationConstraint=$AWS_REGION"
+          aws s3api put-public-access-block --bucket "$AWS_VERIFY_BUCKET" --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+          url=$(aws sqs create-queue --queue-name "$QUEUE_NAME" --attributes MessageRetentionPeriod=600 --query QueueUrl --output text)
+          echo "AWS_VERIFY_QUEUE_URL=$url" >> "$GITHUB_ENV"
+      - name: Run tests
+        run: go test -tags=aws -race -count=1 -v ./internal/awsverify/...
+      - name: Delete disposable resources
+        if: always()
+        run: |
+          aws s3 rm "s3://$AWS_VERIFY_BUCKET" --recursive || true
+          aws s3api delete-bucket --bucket "$AWS_VERIFY_BUCKET" || echo "::warning::bucket $AWS_VERIFY_BUCKET was not deleted"
+          if [ -n "${AWS_VERIFY_QUEUE_URL:-}" ]; then aws sqs delete-queue --queue-url "$AWS_VERIFY_QUEUE_URL" || echo "::warning::queue $QUEUE_NAME was not deleted"; fi
