@@ -24,6 +24,10 @@ First rollout order: the processing service must be deployed first, because the 
 
 A failed smoke suite fails the workflow. It does not undo the applied infrastructure.
 
+## Verifying AWS behaviour
+
+The manual `AWS integration` workflow creates a disposable bucket and queue, runs the `aws`-tagged tests in `internal/awsverify` (conditional writes, immutable-record collisions, missing-key 404s, SQS redelivery), and deletes the resources even when tests fail. A warning in its last step means a resource was left behind and should be deleted by hand.
+
 ## Rolling back
 
 Code and configuration roll back together. Run `Release` at stage `apply` from the earlier commit (Run workflow → pick the tag or branch at that commit). Its packages are still in the package bucket, so the Lambdas return to exactly that build and configuration revision. Check the plan output before the apply step for anything other than Lambda code and environment changes.
