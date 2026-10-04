@@ -28,6 +28,8 @@ A failed smoke suite fails the workflow. It does not undo the applied infrastruc
 
 The manual `AWS integration` workflow creates a disposable bucket and queue, runs the `aws`-tagged tests in `internal/awsverify` (conditional writes, immutable-record collisions, missing-key 404s, SQS redelivery), and deletes the resources even when tests fail. A warning in its last step means a resource was left behind and should be deleted by hand.
 
+The manual `Load and resource` workflow uses isolated in-memory source responses and temporary files. It measures a 64-MiB streamed CSV, a 32-MiB ZIP member, and a source that stalls until its request deadline. Its artifact contains test timing/allocation logs and `/usr/bin/time` peak process memory. Run it before raising source-size or concurrency limits; it does not call AWS or public source endpoints and does not prove deployed Lambda capacity.
+
 ## Rolling back
 
 Code and configuration roll back together. Run `Release` at stage `apply` from the earlier commit (Run workflow → pick the tag or branch at that commit). Its packages are still in the package bucket, so the Lambdas return to exactly that build and configuration revision. Check the plan output before the apply step for anything other than Lambda code and environment changes.

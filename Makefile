@@ -3,7 +3,7 @@ GOFMT ?= gofmt
 TERRAFORM ?= terraform
 STATICCHECK ?= staticcheck
 ERRCHECK ?= errcheck
-.PHONY: fmt lint test-unit test-integration coverage-check build configcheck check check-docs check-contract check-infra package
+.PHONY: fmt lint test-unit test-integration test-load coverage-check build configcheck check check-docs check-contract check-infra package
 fmt:
 	$(GO) fmt ./...
 lint:
@@ -23,6 +23,8 @@ test-integration:
 	$(GO) test -race -tags=integration ./internal/api -run '^TestHTTPComposition'
 	$(GO) test -race -tags=integration ./internal/acquisition -run '^TestAcquisitionSDKComposition'
 	$(GO) test -race -tags=integration ./internal/delivery -run '^TestDeliveryHTTPComposition'
+test-load:
+	$(GO) test -tags=load -run '^TestLoad' -count=1 -v -timeout=15m ./internal/acquisition
 build:
 	$(GO) build ./...
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build ./...
