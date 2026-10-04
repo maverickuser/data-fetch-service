@@ -27,7 +27,7 @@ Keep current instructions and user-approved changes reflected in the LLD. Do not
 - `infra/bootstrap`, `infra/service`: separate Terraform backend bootstrap and production runtime resources.
 - `internal/awsverify`: `aws`-tagged tests run only by the AWS integration workflow against disposable resources.
 - `internal/smoke`, `cmd/smoke`: real-endpoint smoke runner, tested locally against a fake deployment.
-- `.github/workflows`: CI checks (`quality.yml`), the manual smoke workflow (`smoke.yml`), the manual shared-network plan/apply (`network.yml`, calling `cloud-platform-network`), the manual staged release (`release.yml`), and the manual disposable-resource AWS integration tests (`aws-integration.yml`); the load workflow is planned, not present.
+- `.github/workflows`: CI checks (`quality.yml`), manual smoke (`smoke.yml`), isolated load/resource fixtures (`load-resource.yml`), shared-network plan/apply (`network.yml`, calling `cloud-platform-network`), staged release (`release.yml`), and disposable-resource AWS integration tests (`aws-integration.yml`).
 
 Only claim a package or feature exists after inspecting the checkout; this map describes the target architecture during incremental implementation.
 
@@ -41,6 +41,7 @@ Implemented commands:
 - `make test-unit`: isolated unit tests with race detection and unit-only coverage profile.
 - `make coverage-check`: enforce coverage strictly greater than 95% from that profile.
 - `make test-integration`: exercise the real S3 SDK with mocked HTTP, BSE/NSDL event-to-state and source-to-artifact composition, HTTP admission/read routes, and processor delivery with an in-memory HTTP handler. Integration coverage is separate from the unit gate.
+- `make test-load`: run isolated 64-MiB streaming, 32-MiB ZIP, and slow-response acquisition fixtures with timing/allocation logs; the manual workflow also captures peak process memory.
 - `make build`: build implemented production entry points/packages, including Pull, Delivery, and Reconciler Lambdas.
 - `make configcheck`: validate the effective event configuration and print its revision.
 - `make check-docs`: validate repository documentation links.
