@@ -3,7 +3,7 @@ GOFMT ?= gofmt
 TERRAFORM ?= terraform
 STATICCHECK ?= staticcheck
 ERRCHECK ?= errcheck
-.PHONY: fmt lint test-unit test-integration test-load coverage-check build configcheck check check-docs check-contract check-infra package
+.PHONY: fmt lint test-unit test-integration test-load coverage-check build configcheck check check-docs check-contract check-workflows check-infra package
 fmt:
 	$(GO) fmt ./...
 lint:
@@ -32,6 +32,8 @@ configcheck:
 	$(GO) run ./cmd/configcheck -config config/events.yaml
 check-docs:
 	python3 scripts/check_docs.py
+check-workflows:
+	ruby scripts/check_release_workflow.rb
 package:
 	GO="$(GO)" scripts/package.sh dist
 check-infra:
@@ -42,7 +44,7 @@ check-infra:
 	$(TERRAFORM) -chdir=infra/service init -backend=false -input=false -lockfile=readonly
 	$(TERRAFORM) -chdir=infra/service validate
 	$(TERRAFORM) -chdir=infra/service test
-check: lint test-unit coverage-check test-integration build configcheck check-docs check-contract check-infra
+check: lint test-unit coverage-check test-integration build configcheck check-docs check-contract check-workflows check-infra
 
 .PHONY: tools
 tools:

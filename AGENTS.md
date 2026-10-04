@@ -27,7 +27,7 @@ Keep current instructions and user-approved changes reflected in the LLD. Do not
 - `infra/bootstrap`, `infra/service`: separate Terraform backend bootstrap and production runtime resources.
 - `internal/awsverify`: `aws`-tagged tests run only by the AWS integration workflow against disposable resources.
 - `internal/smoke`, `cmd/smoke`: real-endpoint smoke runner, tested locally against a fake deployment.
-- `.github/workflows`: CI checks (`quality.yml`), manual smoke (`smoke.yml`), isolated load/resource fixtures (`load-resource.yml`), shared-network plan/apply (`network.yml`, calling `cloud-platform-network`), staged release (`release.yml`), and disposable-resource AWS integration tests (`aws-integration.yml`).
+- `.github/workflows`: CI checks (`quality.yml`), manual smoke (`smoke.yml`), isolated load/resource fixtures (`load-resource.yml`), shared-network plan/apply (`network.yml`, calling `cloud-platform-network`), staged release (`release.yml`), and disposable-resource AWS integration tests (`aws-integration.yml`, manual or required by release `plan`/`apply`).
 
 Only claim a package or feature exists after inspecting the checkout; this map describes the target architecture during incremental implementation.
 
@@ -45,6 +45,7 @@ Implemented commands:
 - `make build`: build implemented production entry points/packages, including Pull, Delivery, and Reconciler Lambdas.
 - `make configcheck`: validate the effective event configuration and print its revision.
 - `make check-docs`: validate repository documentation links.
+- `make check-workflows`: validate the release dependency chain, reusable AWS integration trigger, and workflow shell syntax.
 - `make check-contract`: verify supplied OpenAPI JSON/YAML equivalence (Ruby standard library).
 - `make check-infra`: Terraform `fmt -check`, `validate`, and mocked `terraform test` for `infra/bootstrap` and `infra/service`; pass `TERRAFORM=` when the pinned 1.16.4 binary is not on `PATH`. Needs network for the provider, no AWS credentials.
 - `make package`: build one reproducible `bootstrap`+config ZIP per Lambda under `dist/` and write `dist/release.json` with the configuration revision and base64 SHA-256 of each ZIP.
