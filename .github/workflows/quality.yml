@@ -39,6 +39,7 @@ jobs:
       - run: make tools
       - run: make lint
       - run: make check-docs
+      - run: make check-workflows
       - run: make check-contract
 
   infrastructure:

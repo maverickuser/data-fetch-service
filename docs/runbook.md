@@ -14,6 +14,8 @@ Everything runs from the manual `Release` workflow (Actions → Release → Run 
 
 A package is never overwritten: re-running a commit re-uses its objects, and a differing ZIP under the same key fails the run.
 
+Before any stage mutates AWS, a read-only preflight checks the deployment role and ownership/availability of the fixed state and package bucket names. For `plan` and `apply`, it also requires the hosted-zone and processor-state inputs, checks the hosted-zone name and processor Terraform outputs against the service contract, and confirms that the processor endpoint is reachable. Both stages must pass the disposable-resource AWS integration workflow before the shared network is applied. A failed preflight prevents package-bucket and network changes. If AWS integration fails, the package stage may already have run, but the shared network and service stack are not applied.
+
 Required repository configuration:
 
 - Secret `AWS_ROLE_TO_ASSUME`.
@@ -27,6 +29,7 @@ A failed smoke suite fails the workflow. It does not undo the applied infrastruc
 ## Verifying AWS behaviour
 
 The manual `AWS integration` workflow creates a disposable bucket and queue, runs the `aws`-tagged tests in `internal/awsverify` (conditional writes, immutable-record collisions, missing-key 404s, SQS redelivery), and deletes the resources even when tests fail. A warning in its last step means a resource was left behind and should be deleted by hand.
+`Release` calls the same workflow for `plan` and `apply`. The deployment role needs permission to create and delete the disposable `data-fetch-service-verify-*` bucket and queue, in addition to its release permissions.
 
 The manual `Load and resource` workflow uses isolated in-memory source responses and temporary files. It measures a 64-MiB streamed CSV, a 32-MiB ZIP member, and a source that stalls until its request deadline. Its artifact contains test timing/allocation logs and `/usr/bin/time` peak process memory. Run it before raising source-size or concurrency limits; it does not call AWS or public source endpoints and does not prove deployed Lambda capacity.
 

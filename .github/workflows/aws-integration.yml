@@ -1,9 +1,13 @@
 name: AWS integration
-# Manual only. Creates a disposable bucket and queue named after this run,
+# Manual or called by Release. Creates a disposable bucket and queue named after this run,
 # runs the `aws`-tagged tests against them, and always deletes them.
 # It never touches production buckets or queues.
 on:
   workflow_dispatch:
+  workflow_call:
+    secrets:
+      AWS_ROLE_TO_ASSUME:
+        required: true
 permissions:
   contents: read
   id-token: write
