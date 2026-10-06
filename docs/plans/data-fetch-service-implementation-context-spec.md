@@ -82,10 +82,10 @@ Compatibility note: AWS Go Lambda uses the `provided.al2023` OS-only runtime and
 | AWS account/organization policy constraints | IAM and resource creation | agreed: standard least-privilege IAM; no additional organization-specific requirements supplied. Scope deployment permissions to required resources; verify effective role permissions during integration |
 | KMS/encryption requirements | S3/SQS configuration | agreed: standard AWS-managed/service-managed encryption; use S3 SSE-S3 and SQS SSE-SQS, including state buckets and DLQs. No customer-managed KMS key required |
 | External producer cross-account permissions | Ingress queue policy | conditional integration input only if publisher is in another account; confirm then and configure the required queue policy |
-| Processor network/connectivity requirements | Lambda deployment and smoke tests | agreed: processor runs in the same VPC as the Lambdas and is reached through private security-group/DNS connectivity |
-| VPC ID, private subnet IDs, and Availability Zone mapping | Terraform runtime infrastructure | pending deployment input; use private subnets in at least two AZs |
-| VPC endpoint and NAT ownership/sizing | Terraform runtime infrastructure | agreed topology: S3 gateway endpoint, SQS/CloudWatch Logs interface endpoints, NAT for public BSE/NSDL calls; exact existing-network ownership and NAT sizing remain deployment inputs |
-| Shared VPC Terraform state and outputs | Processor/fetch deployment ordering | required: one network state consumed by both services; expose `vpc_id`, private subnets by AZ, processor/fetch security groups, endpoint IDs, and internal processor DNS/listener |
+| Processor network/connectivity requirements | Lambda deployment and smoke tests | superseded 2026-10-06: fetch Lambdas run outside any VPC and reach the processor through its IAM-protected public API Gateway route |
+| VPC ID, private subnet IDs, and Availability Zone mapping | Terraform runtime infrastructure | not needed: fetch Lambdas run outside any VPC (2026-10-06) |
+| VPC endpoint and NAT ownership/sizing | Terraform runtime infrastructure | not needed: fetch Lambdas run outside any VPC and use public AWS endpoints; the shared network has no NAT (2026-10-06) |
+| Shared VPC Terraform state and outputs | Processor/fetch deployment ordering | processor only: fetch reads no network state (2026-10-06) |
 
 ### Operational sizing
 

@@ -27,7 +27,7 @@ Keep current instructions and user-approved changes reflected in the LLD. Do not
 - `infra/bootstrap`, `infra/service`: separate Terraform backend bootstrap and production runtime resources.
 - `internal/awsverify`: `aws`-tagged tests run only by the AWS integration workflow against disposable resources.
 - `internal/smoke`, `cmd/smoke`: real-endpoint smoke runner, tested locally against a fake deployment.
-- `.github/workflows`: CI checks (`quality.yml`), manual smoke (`smoke.yml`), isolated load/resource fixtures (`load-resource.yml`), shared-network plan/apply (`network.yml`, calling `cloud-platform-network`), staged release (`release.yml`), and disposable-resource AWS integration tests (`aws-integration.yml`, manual or required by release `plan`/`apply`).
+- `.github/workflows`: CI checks (`quality.yml`), manual smoke (`smoke.yml`), isolated load/resource fixtures (`load-resource.yml`), staged release (`release.yml`), and disposable-resource AWS integration tests (`aws-integration.yml`, manual or required by release `plan`/`apply`).
 
 Only claim a package or feature exists after inspecting the checkout; this map describes the target architecture during incremental implementation.
 

@@ -9,12 +9,12 @@ Everything runs from the manual `Release` workflow (Actions → Release → Run 
 | Stage | What it does | What it creates in AWS |
 |---|---|---|
 | `package` | Runs all CI gates, builds the five Lambda ZIPs, uploads them | State bucket `data-fetch-service-terraform-state`, package bucket `data-fetch-service-packages`, five objects under `releases/{commit}/{config revision}/` |
-| `plan` | The above, then creates or reuses the shared network and plans the service stack | The shared network (billed hourly) if it does not exist |
+| `plan` | The above, then plans the service stack | Nothing more |
 | `apply` | The above, then applies the plan and runs the smoke suite | The whole service |
 
 A package is never overwritten: re-running a commit re-uses its objects, and a differing ZIP under the same key fails the run.
 
-Before any stage mutates AWS, a read-only preflight checks the deployment role and ownership/availability of the fixed state and package bucket names. For `plan` and `apply`, it also requires the hosted-zone and processor-state inputs, checks the hosted-zone name and processor Terraform outputs against the service contract, and confirms that the processor endpoint is reachable. Both stages must pass the disposable-resource AWS integration workflow before the shared network is applied. A failed preflight prevents package-bucket and network changes. If AWS integration fails, the package stage may already have run, but the shared network and service stack are not applied.
+Before any stage mutates AWS, a read-only preflight checks the deployment role and ownership/availability of the fixed state and package bucket names. For `plan` and `apply`, it also requires the hosted-zone and processor-state inputs, checks the hosted-zone name and processor Terraform outputs against the service contract, and confirms that the processor endpoint is reachable. Both stages must pass the disposable-resource AWS integration workflow before the service stack is planned. A failed preflight prevents package-bucket changes. If AWS integration fails, the package stage may already have run, but the service stack is not planned or applied.
 
 Required repository configuration:
 
@@ -46,7 +46,3 @@ Code and configuration roll back together. Run `Release` at stage `apply` from t
 - **Automatic retries:** a crashed or timed-out pull is retried up to three times as linked child runs. Follow `latest_run_id` in the run detail.
 - **Dead-letter queues:** `data-fetch-service-{ingress,pull,delivery}-dlq`. A message there has failed five receives. Read its body for the run ID, check that run's state, and redrive to the source queue only after the cause is fixed; the handlers treat an already-finished run as stale and acknowledge it.
 - **Alarms:** queue oldest-message age, DLQ depth, handler retry outcomes, and Lambda errors. None has a notification target yet, so they must be watched in CloudWatch.
-
-## Removing the shared network
-
-The network is owned by `cloud-platform-network`. Its manual `Destroy network` workflow removes it; it will fail or strand this service while the Lambdas are still attached to the VPC, so destroy the service stack first.

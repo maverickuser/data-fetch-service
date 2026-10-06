@@ -12,23 +12,6 @@ variable "hosted_zone_id" {
   }
 }
 
-variable "network_state_bucket" {
-  type        = string
-  default     = "cloud-platform-network-terraform-state"
-  description = "Bucket containing the shared-network Terraform state, owned by cloud-platform-network."
-}
-
-variable "network_state_key" {
-  type        = string
-  default     = "network/terraform.tfstate"
-  description = "Shared-network state key; this service does not create a VPC."
-}
-
-variable "network_state_region" {
-  type    = string
-  default = "ap-south-1"
-}
-
 variable "processor_state_bucket" {
   type        = string
   description = "Bucket containing the processor service Terraform state."
@@ -36,7 +19,7 @@ variable "processor_state_bucket" {
 
 variable "processor_state_key" {
   type        = string
-  description = "Processor state key with its API endpoint, submission route ARN, and VPC ID."
+  description = "Processor state key with its API endpoint and submission route ARN."
 }
 
 variable "processor_state_region" {

@@ -15,8 +15,8 @@ end
 require_needs(jobs, 'preflight', ['gates'])
 require_needs(jobs, 'package', ['preflight'])
 require_needs(jobs, 'aws-integration', ['preflight'])
-require_needs(jobs, 'network', ['package', 'aws-integration'])
-require_needs(jobs, 'deploy', ['network'])
+require_needs(jobs, 'deploy', ['package', 'aws-integration'])
+abort 'release must not apply the shared network; fetch Lambdas run outside any VPC' if jobs.key?('network')
 require_needs(jobs, 'smoke', ['deploy'])
 
 unless jobs.fetch('aws-integration').fetch('uses') == './.github/workflows/aws-integration.yml'

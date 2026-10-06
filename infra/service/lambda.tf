@@ -34,11 +34,6 @@ resource "aws_lambda_function" "handler" {
     size = each.value.storage
   }
 
-  vpc_config {
-    subnet_ids         = values(local.private_subnets)
-    security_group_ids = [data.aws_security_group.lambda.id]
-  }
-
   environment {
     variables = {
       DEPLOYMENT_COMMIT  = var.deployment_commit
@@ -49,7 +44,7 @@ resource "aws_lambda_function" "handler" {
     }
   }
 
-  depends_on = [terraform_data.network_contract, aws_iam_role_policy.lambda, aws_cloudwatch_log_group.lambda]
+  depends_on = [terraform_data.processor_contract, aws_iam_role_policy.lambda, aws_cloudwatch_log_group.lambda]
 }
 
 resource "aws_lambda_event_source_mapping" "sqs" {

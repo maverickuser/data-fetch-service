@@ -24,10 +24,6 @@ output "lambda_function_names" {
   value = { for name, fn in aws_lambda_function.handler : name => fn.function_name }
 }
 
-output "shared_vpc_id" {
-  value = local.network.vpc_id
-}
-
 output "deployment_commit" {
   value = var.deployment_commit
 }

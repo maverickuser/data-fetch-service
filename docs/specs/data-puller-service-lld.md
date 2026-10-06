@@ -10,7 +10,7 @@ This design implements [data-puller-service-spec.md](data-puller-service-spec.md
 |---|---|
 | Repository and language | GitHub: https://github.com/maverickuser/data-fetch-service; Go; AWS SDK for Go v2 |
 | Runtime | Standard AWS Lambda, not Lambda Managed Instances |
-| Network placement | All five Lambdas run in private subnets in a VPC with no public IPs. The structured-file processor runs in the same VPC. SQS remains an AWS-managed regional service and is reached privately through a VPC interface endpoint; it is not literally deployed inside the VPC |
+| Network placement | All five Lambdas run outside any VPC; see [Network placement](#network-placement). The structured-file processor runs its Lambdas in the shared VPC and is reached through its IAM-protected API Gateway route |
 | Optimisation objective | Minimise measured cost per completed event; no strict batch latency target. Preserve correctness, bounded recovery, and backlog completion within retention |
 | Infrastructure and deployment | Terraform, deployed through GitHub Actions |
 | Deployment environment | `prod` only; GitHub Actions uses the `prod` environment and `config/environments/prod.yaml` |
@@ -72,56 +72,38 @@ flowchart LR
 
 Each SQS queue has a dead-letter queue. All Lambdas emit structured logs and metrics to CloudWatch. These connections are omitted from the diagram for readability.
 
-### VPC runtime topology
+### Network placement
+
+The five fetch Lambdas run outside any VPC (decided 2026-10-06, to avoid an always-on NAT gateway). They need only the public BSE/NSDL sources, the processor's public API Gateway hostname, S3, SQS, and CloudWatch Logs, and no private resource. A Lambda outside a VPC has no listening port either: it runs only when AWS invokes it after an IAM check, so moving it out of a VPC opens no inbound path. Inside the VPC its security group allowed HTTPS to any address through NAT, so outbound access is unchanged too.
 
 ```mermaid
 flowchart LR
-    subgraph VPC[Service VPC]
-        subgraph Private[Private subnets across two AZs]
-            APIv[API Lambda]
-            Adv[Admission Lambda]
-            Pullv[Pull Lambda]
-            Delv[Delivery Lambda]
-            Recv[Reconciler Lambda]
-            Proc[Processor Lambda]
-        end
-        S3EP[S3 gateway endpoint]
-        SQSEP[SQS interface endpoint]
-        LogsEP[CloudWatch Logs interface endpoint]
-        NAT[NAT egress]
+    subgraph Fetch[Fetch Lambdas, no VPC]
+        APIv[API Lambda]
+        Adv[Admission Lambda]
+        Pullv[Pull Lambda]
+        Delv[Delivery Lambda]
+        Recv[Reconciler Lambda]
     end
+    S3[(S3 artifact and state buckets)]
     SQS[(AWS-managed SQS)]
     ProcAPI[Processor API Gateway: processing.kagent.app]
     Sources[Public BSE/NSDL HTTPS]
-    APIv --> S3EP
-    Adv --> SQSEP
-    Pullv --> S3EP
-    Pullv --> NAT --> Sources
-    Delv -->|SigV4 over NAT| ProcAPI --> Proc
-    Proc --> S3EP
-    APIv --> LogsEP
-    Adv --> SQSEP
-    SQSEP --> SQS
-    Delv --> LogsEP
+    Pullv --> Sources
+    Pullv --> S3
+    APIv --> S3
+    Adv --> SQS
+    Delv -->|SigV4| ProcAPI
+    Recv -->|SigV4| ProcAPI
 ```
 
-SQS is a regional AWS-managed service, so the queue itself is outside the VPC; the interface endpoint provides private VPC access. The Lambda event-source mapping is still managed by AWS and does not require a public route.
+S3 and SQS calls use the regional public AWS endpoints over TLS and are authorized by IAM, bucket, and queue policies. None of those policies depends on a VPC endpoint. What the VPC placement gave up: VPC flow logs for these functions and the option of a domain allow-list firewall on egress. CloudTrail data events and the service's own structured logs remain.
 
-All five fetch Lambda functions are attached to private subnets in at least two Availability Zones. They do not receive public IP addresses and have no inbound security-group rules. A dedicated security group permits outbound HTTPS (TCP 443) to VPC endpoints and NAT egress. The processor's Lambdas use the same VPC, but its submission route is served by API Gateway at `processing.kagent.app`; fetch Delivery signs that request with SigV4 for `execute-api`.
+### Contract with structured-file processing
 
-The service uses these private connectivity paths:
+The processor owns its own placement: its Lambdas run in the shared VPC from `cloud-platform-network` to reach its database, and this service does not read the network state. The processor stack exposes `processor_api_endpoint` and `processor_submission_route_arn`. It grants the fetch Delivery and Reconciler roles access to its IAM-protected `POST /v1/event-ingestions` route; those roles grant `execute-api:Invoke` on that route only.
 
-- An S3 gateway endpoint for artifact and state buckets. The shared network restricts it by endpoint policy to buckets in this AWS account, because it cannot know each service's bucket names; a policy naming the two service buckets is also accepted.
-- Interface endpoints for SQS and CloudWatch Logs, with private DNS enabled. Endpoint security groups allow TCP 443 from the Lambda security group only. SQS event-source mappings remain an AWS control-plane integration; the Lambda code's SDK calls use the SQS endpoint.
-- The BSE and NSDL public HTTPS endpoints and processor API Gateway hostname are reached through NAT egress from the private subnets. Processor submission uses the IAM-protected API Gateway route; the processor's application Lambdas remain in the shared VPC.
-
-Terraform receives the VPC ID, private subnet IDs, and Availability Zone mapping from shared-network state. It must not silently place a Lambda in a public subnet. Route tables, endpoint policies, NAT routes, security groups, and DNS settings are managed and validated together. VPC flow logs and endpoint metrics are enabled according to the production logging policy.
-
-### Shared-VPC contract with structured-file processing
-
-The VPC is owned by a separate shared-network Terraform state in the `cloud-platform-network` repository (state bucket `cloud-platform-network-terraform-state`, key `network/terraform.tfstate`). Service pipelines call that repository's reusable workflow first; it creates the network on the first call and changes nothing afterwards. The processor service and this service consume the same versioned network outputs; neither application stack creates a VPC or chooses arbitrary subnet IDs. Required network outputs are `vpc_id`, private subnet IDs and route tables by Availability Zone, NAT gateway IDs, `fetch_lambda_security_group_id`, and the IDs of the S3/SQS/Logs endpoints. The processor stack exposes `vpc_id`, `processor_api_endpoint`, and `processor_submission_route_arn`. It grants the fetch Delivery and Reconciler roles access to its IAM-protected `POST /v1/event-ingestions` route; those roles grant `execute-api:Invoke` on that route only.
-
-Terraform preconditions and CI checks compare the VPC ID for fetch Lambda subnets/security group and the processor state. The deployment fails on a mismatch. Apply network state first, processor infrastructure second, and this service third. The final smoke test sends a SigV4-signed request through the processor API Gateway hostname and verifies its HTTP 202 receipt.
+Terraform preconditions and the release preflight check the processor endpoint and route ARN. Apply processor infrastructure first and this service second. The final smoke test sends a SigV4-signed request through the processor API Gateway hostname and verifies its HTTP 202 receipt.
 
 ### Component responsibilities
 
@@ -904,8 +886,7 @@ Terraform provisions:
 - Private artifact/state buckets, encryption, lifecycle policies, and prefix-scoped IAM.
 - Three service-owned SQS queues (ingress, pull, and delivery), each with a DLQ, queue policies, redrive/retention/visibility settings, and Lambda event source mappings. Name the ingress queue `data-fetch-service-ingress` and its DLQ `data-fetch-service-ingress-dlq`. This service's Terraform state is the sole owner of these resources.
 - Export `ingress_queue_url` and `ingress_queue_arn` as Terraform outputs for external producers. Scheduler and Admission Lambda reference the created resource directly; `INGRESS_QUEUE_ARN` and `INGRESS_QUEUE_URL` are no longer deployment inputs. External services only publish messages and must not manage this queue or attach unrelated consumers.
-- Five Go Lambda functions using `provided.al2023`, initially `arm64`, with pinned build toolchain and SDK dependencies, attached to the configured private VPC subnets and Lambda security group.
-- VPC networking for the runtime: private subnet route tables, S3 gateway endpoint, SQS and CloudWatch Logs interface endpoints, endpoint security groups/policies, private DNS, and NAT egress for public source and processor API Gateway calls.
+- Five Go Lambda functions using `provided.al2023`, initially `arm64`, with pinned build toolchain and SDK dependencies, outside any VPC.
 - API Gateway routes, integration permissions, throttling, access logging, and `fetch.kagent.app` custom domain. Use a DNS-validated ACM certificate and Route 53 alias in the existing public `kagent.app` zone, referenced by hosted-zone ID; this stack owns only its alias and certificate-validation records.
 - YAML-derived EventBridge schedules targeting ingress SQS, plus the internal recovery schedule.
 - Configured EventBridge rule targets/mappings for supported CloudWatch Events/native EventBridge producers. Service Terraform owns the ingress queue policy and grants access to configured producer principals and EventBridge rules as required, using scoped source conditions for rule delivery. Configure Admission consumer and Scheduler sender IAM permissions; external producer stacks manage their own identity permissions to send to the exported queue ARN. Supply external producer role ARNs and any cross-account/KMS requirements during integration.
@@ -914,7 +895,7 @@ Terraform provisions:
 
 Each Lambda adapter emits one JSON/CloudWatch Embedded Metric Format outcome per handled request, message, or reconciliation page. The fixed fields are component, operation, outcome, optional durable run/request key, transport request ID, correlation ID, and a bounded error code. The root admitted snapshot sets `correlation_id` to its run ID; linked and automatic child snapshots preserve that root identity. When enabled, adapters read the pinned snapshot within a 100 ms telemetry deadline to log the same correlation ID for parent and child; they skip the lookup when less than 250 ms of invocation time remains. Telemetry lookup failure does not change the business result. Metric dimensions use only component, operation, and outcome. Do not log raw events, URLs, credentials, source/processor bodies, or exception text. Emission failures do not change SQS acknowledgement or API results. PR 10 alarms on retry-outcome counts, Lambda invocation errors, and native SQS DLQ depth and oldest-message age (which covers pending delivery age). State-derived failed-run and expired-ownership metrics are not yet emitted by the handlers; their metrics and alarms remain open work and no alarm has a notification target yet.
 
-Run Lambdas inside the configured VPC private subnets. Public BSE/NSDL sources and the processor API Gateway hostname are reached through NAT; S3, SQS, and CloudWatch Logs use VPC endpoints. The Delivery Lambda signs the unchanged processor request with SigV4 for `execute-api`, and the Delivery and Reconciler roles (the Reconciler resumes interrupted deliveries) can invoke only the processor submission route. A `403` is a terminal authorization failure, not a retryable processor response. Artifact buckets remain private. The configured processor must be reachable before enabling real handoff.
+Run Lambdas outside any VPC. Public BSE/NSDL sources, the processor API Gateway hostname, S3, SQS, and CloudWatch Logs are reached over their public HTTPS endpoints. The Delivery Lambda signs the unchanged processor request with SigV4 for `execute-api`, and the Delivery and Reconciler roles (the Reconciler resumes interrupted deliveries) can invoke only the processor submission route. A `403` is a terminal authorization failure, not a retryable processor response. Artifact buckets remain private. The configured processor must be reachable before enabling real handoff.
 
 GitHub Actions workflow:
 
@@ -986,9 +967,8 @@ These are implementation/deployment inputs, not changes to the agreed architectu
 - Deployment environment: `prod` only, using `config/environments/prod.yaml` and the GitHub Actions `prod` environment. Serialize all production deployments through one concurrency group.
 - Ingress SQS: created and owned by this service's Terraform, dedicated to data-fetch-service, and deployed in the Lambda region. Both NSDL producer messages and BSE Scheduler messages use it. Terraform owns its DLQ, access, visibility, and retention configuration and exports its URL/ARN. Remaining integration input: external producer identities for send permissions; no externally supplied queue is required.
 - Agreed resource prefix: `data-fetch-service`, without region, account ID, or environment suffixes. Artifact bucket: `data-fetch-service-artifacts`; state/history bucket: `data-fetch-service-state`; separate Terraform backend bucket: `data-fetch-service-terraform-state`. Queues and Lambda functions use descriptive suffixes under the same prefix. Bucket name availability must be checked during deployment; a collision requires an explicit naming adjustment, not an automatically appended account/region suffix.
-- Processor state outputs for `processor_api_endpoint` (`https://processing.kagent.app/v1/event-ingestions`), `processor_submission_route_arn`, and shared `vpc_id`; processor read identity for manifests/files. The fetch Delivery role invokes that route with SigV4.
+- Processor state outputs for `processor_api_endpoint` (`https://processing.kagent.app/v1/event-ingestions`), `processor_submission_route_arn`; processor read identity for manifests/files. The fetch Delivery role invokes that route with SigV4.
 - Existing public `kagent.app` hosted-zone ID for the `fetch.kagent.app` ACM certificate validation and alias; the zone itself remains externally owned.
-- VPC ID, private subnet IDs in at least two Availability Zones, route-table ownership, and NAT gateway sizing/ownership for public BSE/NSDL and processor API Gateway egress.
 - Real-endpoint smoke inputs: `SMOKE_NSDL_ISIN=INE121A07QY9` (user-supplied; real responses to be verified during integration) and downstream processor admission/read access. BSE starts with the current IST date and uses at least three earlier-weekday availability fallbacks as defined above; a manually supplied published date is not required.
 - Initial volume: approximately 10,000 NSDL events/day (60,000 source calls/day before retries and smoke tests), plus one BSE event per scheduled weekday. Source sizes, burst distribution, and upstream request limits still need validation to tune concurrency, timeouts, and file limits. Load tests must measure aggregate source request rate, queue age, S3 request cost, and reconciler scan delay at this volume; per-run concurrency alone does not cap aggregate calls across Lambda invocations.
 - Initial job configuration is specified above for BSE debt bhavcopy and all six NSDL API calls; the processor selects its YAML contract using the manifest `dataschema` URN. `event_type`, `job_id`, and `format` are validated source metadata and support routing and traceability. BSE runs at 20:00 Asia/Kolkata, Monday through Friday; NSDL is externally SQS-triggered and has no recurring schedule.

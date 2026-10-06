@@ -2,7 +2,7 @@ name: Release
 # Manual only. Nothing here runs on push or pull request.
 #   package: run the gates, build the Lambda packages, and upload them. Creates
 #            only the Terraform state bucket and the package bucket.
-#   plan:    also create or reuse the shared network and plan the service stack.
+#   plan:    also plan the service stack.
 #   apply:   also apply the plan and run the real-endpoint smoke suite.
 on:
   workflow_dispatch:
@@ -75,7 +75,7 @@ jobs:
               exit 1
             fi
           done
-      - name: Check processor and DNS inputs before network apply
+      - name: Check processor and DNS inputs
         if: ${{ inputs.stage != 'package' }}
         run: |
           set -euo pipefail
@@ -87,7 +87,6 @@ jobs:
           endpoint=$(jq -er '.outputs.processor_api_endpoint.value | select(type == "string" and startswith("https://"))' "$RUNNER_TEMP/processor-state.json")
           if [ "$endpoint" != 'https://processing.kagent.app/v1/event-ingestions' ]; then echo '::error::Processor endpoint differs from the service contract'; exit 1; fi
           jq -e --arg region "$AWS_REGION" '.outputs.processor_submission_route_arn.value | type == "string" and test("^arn:aws:execute-api:" + $region + ":[0-9]{12}:[^/]+/[^/]+/POST/v1/event-ingestions$")' "$RUNNER_TEMP/processor-state.json" >/dev/null
-          jq -e '.outputs.vpc_id.value | type == "string" and startswith("vpc-")' "$RUNNER_TEMP/processor-state.json" >/dev/null
           curl --silent --show-error --output /dev/null --connect-timeout 5 --max-time 10 "$endpoint"
 
   aws-integration:
@@ -191,23 +190,10 @@ jobs:
           name: release-manifest
           path: dist/release.json
 
-  network:
-    name: Shared network
-    if: ${{ inputs.stage != 'package' }}
-    needs: [package, aws-integration]
-    # Pinned to main until the network repository publishes its first version tag.
-    uses: maverickuser/cloud-platform-network/.github/workflows/apply.yml@main
-    with:
-      network_ref: main
-      aws_region: ${{ vars.AWS_REGION || 'ap-south-1' }}
-      apply: true
-    secrets:
-      AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-
   deploy:
     name: Plan and apply service
     if: ${{ inputs.stage != 'package' }}
-    needs: [package, network]
+    needs: [package, aws-integration]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     environment: prod
