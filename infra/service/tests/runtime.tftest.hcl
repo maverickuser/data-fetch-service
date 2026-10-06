@@ -206,7 +206,7 @@ run "production_shape" {
   }
   assert {
     condition     = alltrue([for fn in aws_lambda_function.handler : length(fn.vpc_config) == 0]) && alltrue([for policy in aws_iam_role_policy.lambda : !anytrue([for statement in jsondecode(policy.policy).Statement : anytrue([for action in flatten([statement.Action]) : startswith(action, "ec2:")])])])
-    error_message = "Fetch Lambdas run outside the VPC and get no network-interface permissions."
+    error_message = "Fetch Lambdas run outside the VPC and their inline role policies grant no network-interface permissions."
   }
   assert {
     condition     = output.deployment_commit == var.deployment_commit

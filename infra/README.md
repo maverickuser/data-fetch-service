@@ -11,7 +11,7 @@ Two Terraform root modules, both pinned to Terraform `~> 1.16.4` and AWS provide
 
 ## Apply order
 
-1. `data-processing-service` infrastructure (it applies the shared network it needs).
+1. `data-processing-service` infrastructure (it applies and uses the shared network; this service uses no VPC).
 2. `bootstrap/`, then `service/`.
 
 The manual `Release` workflow does all of this; see the [runbook](../docs/runbook.md). To initialise the service backend by hand:
