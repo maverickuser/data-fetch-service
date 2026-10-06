@@ -6,6 +6,8 @@ History note (2026-10-02): before the first push, the stack's commits were rewri
 
 Shared network (2026-10-02): the VPC comes from the separate `cloud-platform-network` repository. The manual `Shared network` workflow applied it in run 37029853747, then that repository's destroy workflow removed 25 resources in run 37030924228. No later network apply is recorded, so no shared VPC is currently expected.
 
+No VPC (2026-10-06): the fetch Lambdas moved out of the VPC so the shared network can drop its NAT gateway. The `Shared network` workflow, the network remote state, the VPC preconditions, and the Lambdas' `ec2:` permissions were removed; the release no longer applies the network.
+
 | Increment | Status |
 |---|---|
 | 01 Foundation | Implemented locally; separate agent reviewed staged content with no blockers |

@@ -55,11 +55,6 @@ resource "aws_iam_role_policy" "lambda" {
         Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
         Resource = ["${aws_cloudwatch_log_group.lambda[each.key].arn}:*"]
         }, {
-        Sid      = "VpcNetworkInterfaces"
-        Effect   = "Allow"
-        Action   = ["ec2:CreateNetworkInterface", "ec2:DeleteNetworkInterface", "ec2:DescribeNetworkInterfaces", "ec2:DescribeSubnets", "ec2:AssignPrivateIpAddresses", "ec2:UnassignPrivateIpAddresses"]
-        Resource = "*"
-        }, {
         Sid      = "StateObjectReadWrite"
         Effect   = "Allow"
         Action   = ["s3:GetObject", "s3:PutObject"]

@@ -76,70 +76,13 @@ variables {
 }
 
 override_data {
-  target = data.terraform_remote_state.network
-  values = {
-    outputs = {
-      vpc_id                         = "vpc-test"
-      private_subnet_ids_by_az       = { ap-south-1a = "subnet-a", ap-south-1b = "subnet-b" }
-      private_route_table_ids_by_az  = { ap-south-1a = "rtb-a", ap-south-1b = "rtb-b" }
-      nat_gateway_ids_by_az          = { ap-south-1a = "nat-a", ap-south-1b = "nat-b" }
-      s3_endpoint_id                 = "vpce-s3"
-      sqs_endpoint_id                = "vpce-sqs"
-      logs_endpoint_id               = "vpce-logs"
-      fetch_lambda_security_group_id = "sg-fetch"
-    }
-  }
-}
-
-override_data {
   target = data.terraform_remote_state.processor
   values = {
     outputs = {
-      vpc_id                         = "vpc-test"
       processor_api_endpoint         = "https://processing.kagent.app/v1/event-ingestions"
       processor_submission_route_arn = "arn:aws:execute-api:ap-south-1:123456789012:processor/prod/POST/v1/event-ingestions"
     }
   }
-}
-
-override_data {
-  target = data.aws_subnet.private["ap-south-1a"]
-  values = { vpc_id = "vpc-test", availability_zone = "ap-south-1a", map_public_ip_on_launch = false }
-}
-
-override_data {
-  target = data.aws_subnet.private["ap-south-1b"]
-  values = { vpc_id = "vpc-test", availability_zone = "ap-south-1b", map_public_ip_on_launch = false }
-}
-
-override_data {
-  target = data.aws_route_table.private["ap-south-1a"]
-  values = { vpc_id = "vpc-test", routes = [{ cidr_block = "0.0.0.0/0", nat_gateway_id = "nat-a" }] }
-}
-
-override_data {
-  target = data.aws_route_table.private["ap-south-1b"]
-  values = { vpc_id = "vpc-test", routes = [{ cidr_block = "0.0.0.0/0", nat_gateway_id = "nat-b" }] }
-}
-
-override_data {
-  target = data.aws_vpc_endpoint.s3
-  values = { vpc_id = "vpc-test", route_table_ids = ["rtb-a", "rtb-b"], policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:*\",\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"aws:ResourceAccount\":\"123456789012\"}}}]}" }
-}
-
-override_data {
-  target = data.aws_vpc_endpoint.sqs
-  values = { vpc_id = "vpc-test", private_dns_enabled = true }
-}
-
-override_data {
-  target = data.aws_vpc_endpoint.logs
-  values = { vpc_id = "vpc-test", private_dns_enabled = true }
-}
-
-override_data {
-  target = data.aws_security_group.lambda
-  values = { vpc_id = "vpc-test" }
 }
 
 override_data {
@@ -262,26 +205,13 @@ run "production_shape" {
     error_message = "API and Pull need scoped artifact read/list and Pull needs write."
   }
   assert {
-    condition     = output.shared_vpc_id == "vpc-test" && output.deployment_commit == var.deployment_commit
-    error_message = "Outputs must identify the shared VPC and exact release."
+    condition     = alltrue([for fn in aws_lambda_function.handler : length(fn.vpc_config) == 0]) && alltrue([for policy in aws_iam_role_policy.lambda : !anytrue([for statement in jsondecode(policy.policy).Statement : anytrue([for action in flatten([statement.Action]) : startswith(action, "ec2:")])])])
+    error_message = "Fetch Lambdas run outside the VPC and their inline role policies grant no network-interface permissions."
   }
-}
-
-run "rejects_processor_in_other_vpc" {
-  command = plan
-
-  override_data {
-    target = data.terraform_remote_state.processor
-    values = {
-      outputs = {
-        vpc_id                         = "vpc-other"
-        processor_api_endpoint         = "https://processing.kagent.app/v1/event-ingestions"
-        processor_submission_route_arn = "arn:aws:execute-api:ap-south-1:123456789012:processor/prod/POST/v1/event-ingestions"
-      }
-    }
+  assert {
+    condition     = output.deployment_commit == var.deployment_commit
+    error_message = "Outputs must identify the exact release."
   }
-
-  expect_failures = [terraform_data.network_contract]
 }
 
 run "rejects_processor_endpoint_not_in_bundled_config" {
@@ -291,32 +221,12 @@ run "rejects_processor_endpoint_not_in_bundled_config" {
     target = data.terraform_remote_state.processor
     values = {
       outputs = {
-        vpc_id                         = "vpc-test"
         processor_api_endpoint         = "https://other.kagent.app/v1/event-ingestions"
         processor_submission_route_arn = "arn:aws:execute-api:ap-south-1:123456789012:processor/prod/POST/v1/event-ingestions"
       }
     }
   }
 
-  expect_failures = [terraform_data.network_contract, terraform_data.configuration_contract]
+  expect_failures = [terraform_data.processor_contract, terraform_data.configuration_contract]
 }
 
-run "rejects_endpoint_policy_for_another_account" {
-  command = plan
-
-  override_data {
-    target = data.aws_vpc_endpoint.s3
-    values = { vpc_id = "vpc-test", route_table_ids = ["rtb-a", "rtb-b"], policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:*\",\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"aws:ResourceAccount\":\"999999999999\"}}}]}" }
-  }
-
-  expect_failures = [terraform_data.network_contract]
-}
-
-run "accepts_endpoint_policy_naming_both_buckets" {
-  command = plan
-
-  override_data {
-    target = data.aws_vpc_endpoint.s3
-    values = { vpc_id = "vpc-test", route_table_ids = ["rtb-a", "rtb-b"], policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:*\",\"Resource\":[\"arn:aws:s3:::data-fetch-service-artifacts/*\",\"arn:aws:s3:::data-fetch-service-state/*\"]}]}" }
-  }
-}

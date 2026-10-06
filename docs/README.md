@@ -16,4 +16,4 @@
 - [Original fetch specification](specs/data-puller-service-spec.md): historical; LLD supersedes conflicts.
 - [Processor LLD](specs/structured-file-processing-lld.md) and [processor specification](specs/structured-file-processing-spec.md): external references. Processor LLD is preserved unchanged at user request; authoritative admission details are in OpenAPI.
 
-The shared-network stack owns VPC resources; application stacks consume outputs. Network ownership prose predating that decision does not authorize duplicate Terraform ownership. Exact processor listener outputs belong to its application stack, not the network stack.
+The shared-network stack owns VPC resources. This service's Lambdas run outside any VPC (2026-10-06), so it consumes no network outputs; VPC and NAT prose predating that decision is superseded. Exact processor listener outputs belong to its application stack, not the network stack.

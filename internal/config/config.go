@@ -46,7 +46,7 @@ type Defaults struct {
 	MaxTempBytes            int64 `yaml:"max_temp_bytes" json:"max_temp_bytes"`
 }
 
-// Processor configures the private downstream admission endpoint.
+// Processor configures the IAM-protected API Gateway admission endpoint.
 type Processor struct {
 	Enabled               bool   `yaml:"enabled" json:"enabled"`
 	URL                   string `yaml:"url" json:"url"`
