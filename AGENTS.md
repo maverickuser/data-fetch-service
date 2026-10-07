@@ -84,6 +84,17 @@ Merge bottom-up and rebase/retarget children carefully. Rerun required checks on
 
 Production deployment activates only after the full implementation and release workflow is ready. Perform implementation, agent review/fixes, and deterministic tests locally. Do not apply Terraform or require live AWS resources for intermediate PRs. After the complete stack is locally verified, GitHub Actions CD can run from `main` and assume the dedicated AWS role through OIDC using the `AWS_ROLE_TO_ASSUME` secret. Role ARN, processor integration, and fixtures are deployment inputs. Queue ARN/URL come from this service's Terraform outputs. Keep secrets out of source and logs, and keep destructive test fixtures separate from production data.
 
+## Context management
+
+The repository, not the conversation, holds durable state: the implementation plan, `docs/plans/implementation-status.md`, the branch, and the PR. Shrinking the context is therefore always safe once that state is written down.
+
+- **Compact** (`/compact` in Claude Code or Codex) when the context is roughly two-thirds full, after a PR merges, or after a review pass ends. Do it between steps, never in the middle of an edit or while chasing a failing check.
+- **Keep** in the summary: the plan PR number, branch, parent branch, and PR link; files changed and why; checks run with their result and the exact failing test or error; open review findings; and user decisions or open questions not yet recorded in the repository.
+- **Drop**: full file contents, passing test output, old command logs, superseded attempts, and documents that can simply be re-read.
+- **Purge** (`/clear` or a new session) instead of compacting when switching to an unrelated PR or stack, or when the context is mostly a dead end. Before purging, record progress in `implementation-status.md` or the PR description.
+- If a summary would lose an unrecorded decision, write it to the spec, a decision record, or the status file first.
+- After any compact or purge, re-read this file and the status file, and check the branch and `git status` before editing.
+
 ## Keeping guidance current
 
 Update canonical specs, examples, commands, and status when behaviour changes. Store substantial new decisions in `docs/decisions/` and link them from the LLD. Keep this file concise by linking detailed designs rather than copying them. Add scoped guidance only for real directory-specific requirements.
