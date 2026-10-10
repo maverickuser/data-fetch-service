@@ -22,7 +22,7 @@ Required repository configuration:
 - Variable `HOSTED_ZONE_ID` (needed from `plan` onward), `SMOKE_NSDL_ISIN` (needed for `apply`).
 - Optional variables: `AWS_REGION` (default `ap-south-1`), `ENABLE_INGRESS_CONSUMPTION` and `ENABLE_BSE_SCHEDULE` (default `false`), `EXTERNAL_PRODUCER_ROLE_ARNS` and `PROCESSOR_READER_ROLE_ARNS` (JSON lists, default `[]`), `SMOKE_BSE_FALLBACK_WEEKDAYS`.
 
-First rollout order: the processing service must be deployed first, because delivery submits to its `POST /v1/event-ingestions` route in the same account. Release with both activation switches `false`, set `processor.enabled: true` in `config/environments/prod.yaml` once the processor accepts submissions, then set `ENABLE_INGRESS_CONSUMPTION` and `ENABLE_BSE_SCHEDULE` to `true` and release again. The smoke suite's schedule check fails while `ENABLE_BSE_SCHEDULE` is `false`.
+First rollout order: the processing service must be deployed first, because delivery submits to its `POST /v1/event-ingestions` route in the same account. `config/environments/prod.yaml` sets `processor.enabled: true`, so delivery submits to the processor as soon as runs complete. Release with both activation switches `false`, then set `ENABLE_INGRESS_CONSUMPTION` and `ENABLE_BSE_SCHEDULE` to `true` and release again. The smoke suite's schedule check fails while `ENABLE_BSE_SCHEDULE` is `false`.
 
 A failed smoke suite fails the workflow. It does not undo the applied infrastructure.
 

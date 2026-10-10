@@ -4,3 +4,4 @@ aws_region: ap-south-1
 resource_prefix: data-fetch-service
 processor:
   url: https://processing.kagent.app/v1/event-ingestions
+  enabled: true
