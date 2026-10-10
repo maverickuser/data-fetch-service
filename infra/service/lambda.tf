@@ -44,7 +44,7 @@ resource "aws_lambda_function" "handler" {
     }
   }
 
-  depends_on = [terraform_data.processor_contract, aws_iam_role_policy.lambda, aws_cloudwatch_log_group.lambda]
+  depends_on = [terraform_data.configuration_contract, aws_iam_role_policy.lambda, aws_cloudwatch_log_group.lambda]
 }
 
 resource "aws_lambda_event_source_mapping" "sqs" {

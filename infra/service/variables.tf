@@ -12,21 +12,6 @@ variable "hosted_zone_id" {
   }
 }
 
-variable "processor_state_bucket" {
-  type        = string
-  description = "Bucket containing the processor service Terraform state."
-}
-
-variable "processor_state_key" {
-  type        = string
-  description = "Processor state key with its API endpoint and submission route ARN."
-}
-
-variable "processor_state_region" {
-  type    = string
-  default = "ap-south-1"
-}
-
 variable "deployment_commit" {
   type        = string
   description = "Exact source commit bundled in every Lambda package."

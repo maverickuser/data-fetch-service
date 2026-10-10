@@ -59,29 +59,17 @@ override_data {
 }
 
 variables {
-  aws_region             = "ap-south-1"
-  processor_state_bucket = "test-processor-state"
-  processor_state_key    = "processor.tfstate"
-  hosted_zone_id         = "Z1234567890"
-  deployment_commit      = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  config_revision        = "sha256:44e1c1fcf478af773ef390eb4dd6b6f9f4bfbf048653079fb24ce0c90ea9d673"
-  package_bucket         = "test-release-packages"
+  aws_region        = "ap-south-1"
+  hosted_zone_id    = "Z1234567890"
+  deployment_commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  config_revision   = "sha256:44e1c1fcf478af773ef390eb4dd6b6f9f4bfbf048653079fb24ce0c90ea9d673"
+  package_bucket    = "test-release-packages"
   package_sha256 = {
     api        = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
     admission  = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
     pull       = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
     delivery   = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
     reconciler = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-  }
-}
-
-override_data {
-  target = data.terraform_remote_state.processor
-  values = {
-    outputs = {
-      processor_api_endpoint         = "https://processing.kagent.app/v1/event-ingestions"
-      processor_submission_route_arn = "arn:aws:execute-api:ap-south-1:123456789012:processor/prod/POST/v1/event-ingestions"
-    }
   }
 }
 
@@ -151,7 +139,7 @@ run "production_shape" {
     error_message = "Every role needs the acceptance/ state prefix."
   }
   assert {
-    condition     = toset([for kind in ["api", "admission", "pull", "delivery", "reconciler"] : kind if contains(jsondecode(aws_iam_role_policy.lambda[kind].policy).Statement[*].Sid, "SubmitToProcessorAPI")]) == toset(["delivery", "reconciler"]) && [for statement in jsondecode(aws_iam_role_policy.lambda["delivery"].policy).Statement : statement.Resource if statement.Sid == "SubmitToProcessorAPI"][0] == "arn:aws:execute-api:ap-south-1:123456789012:processor/prod/POST/v1/event-ingestions"
+    condition     = toset([for kind in ["api", "admission", "pull", "delivery", "reconciler"] : kind if contains(jsondecode(aws_iam_role_policy.lambda[kind].policy).Statement[*].Sid, "SubmitToProcessorAPI")]) == toset(["delivery", "reconciler"]) && [for statement in jsondecode(aws_iam_role_policy.lambda["delivery"].policy).Statement : statement.Resource if statement.Sid == "SubmitToProcessorAPI"][0] == "arn:aws:execute-api:ap-south-1:123456789012:*/*/POST/v1/event-ingestions"
     error_message = "Only Delivery and the Reconciler's delivery resume may invoke the single processor submission route."
   }
   assert {
@@ -213,20 +201,3 @@ run "production_shape" {
     error_message = "Outputs must identify the exact release."
   }
 }
-
-run "rejects_processor_endpoint_not_in_bundled_config" {
-  command = plan
-
-  override_data {
-    target = data.terraform_remote_state.processor
-    values = {
-      outputs = {
-        processor_api_endpoint         = "https://other.kagent.app/v1/event-ingestions"
-        processor_submission_route_arn = "arn:aws:execute-api:ap-south-1:123456789012:processor/prod/POST/v1/event-ingestions"
-      }
-    }
-  }
-
-  expect_failures = [terraform_data.processor_contract, terraform_data.configuration_contract]
-}
-

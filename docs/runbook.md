@@ -14,15 +14,15 @@ Everything runs from the manual `Release` workflow (Actions → Release → Run 
 
 A package is never overwritten: re-running a commit re-uses its objects, and a differing ZIP under the same key fails the run.
 
-Before any stage mutates AWS, a read-only preflight checks the deployment role and ownership/availability of the fixed state and package bucket names. For `plan` and `apply`, it also requires the hosted-zone and processor-state inputs, checks the hosted-zone name and processor Terraform outputs against the service contract, and confirms that the processor endpoint is reachable. Both stages must pass the disposable-resource AWS integration workflow before the service stack is planned. A failed preflight prevents package-bucket changes. If AWS integration fails, the package stage may already have run, but the service stack is not planned or applied.
+Before any stage mutates AWS, a read-only preflight checks the deployment role and ownership/availability of the fixed state and package bucket names. For `plan` and `apply`, it also requires the hosted-zone input, checks the hosted-zone name, and confirms that the processor endpoint is reachable. Both stages must pass the disposable-resource AWS integration workflow before the service stack is planned. A failed preflight prevents package-bucket changes. If AWS integration fails, the package stage may already have run, but the service stack is not planned or applied.
 
 Required repository configuration:
 
 - Secret `AWS_ROLE_TO_ASSUME`.
-- Variables `HOSTED_ZONE_ID`, `PROCESSOR_STATE_BUCKET`, `PROCESSOR_STATE_KEY` (needed from `plan` onward), `SMOKE_NSDL_ISIN` (needed for `apply`).
+- Variable `HOSTED_ZONE_ID` (needed from `plan` onward), `SMOKE_NSDL_ISIN` (needed for `apply`).
 - Optional variables: `AWS_REGION` (default `ap-south-1`), `ENABLE_INGRESS_CONSUMPTION` and `ENABLE_BSE_SCHEDULE` (default `false`), `EXTERNAL_PRODUCER_ROLE_ARNS` and `PROCESSOR_READER_ROLE_ARNS` (JSON lists, default `[]`), `SMOKE_BSE_FALLBACK_WEEKDAYS`.
 
-First rollout order: the processing service must be deployed first, because the service stack reads its endpoint and route from its Terraform state. Release with both activation switches `false`, set `processor.enabled: true` in `config/environments/prod.yaml` once the processor accepts submissions, then set `ENABLE_INGRESS_CONSUMPTION` and `ENABLE_BSE_SCHEDULE` to `true` and release again. The smoke suite's schedule check fails while `ENABLE_BSE_SCHEDULE` is `false`.
+First rollout order: the processing service must be deployed first, because delivery submits to its `POST /v1/event-ingestions` route in the same account. Release with both activation switches `false`, set `processor.enabled: true` in `config/environments/prod.yaml` once the processor accepts submissions, then set `ENABLE_INGRESS_CONSUMPTION` and `ENABLE_BSE_SCHEDULE` to `true` and release again. The smoke suite's schedule check fails while `ENABLE_BSE_SCHEDULE` is `false`.
 
 A failed smoke suite fails the workflow. It does not undo the applied infrastructure.
 

@@ -53,7 +53,7 @@ PR 10 adds the Terraform backend bootstrap and production runtime modules, SigV4
 
 PR 11 (partial) adds the real-endpoint smoke runner, tested only against a local fake deployment, and a `workflow_dispatch` smoke workflow that has never been run. A source HTTP 404 is now recorded as `SOURCE_NOT_FOUND`. `make check` passes 3557/3730 unit statements (95.36%) after the review fixes. See [the local PR description](live-verification-pr.md).
 
-PR 12 adds `make package` (reproducible Lambda ZIPs), a bootstrap module for the package bucket, and a `workflow_dispatch` `Release` workflow with stages `package`, `plan`, and `apply`. The `plan` and `apply` stages cannot succeed until the processing service publishes its Terraform state. Nothing from this repository is deployed. See [the runbook](../runbook.md).
+PR 12 adds `make package` (reproducible Lambda ZIPs), a bootstrap module for the package bucket, and a `workflow_dispatch` `Release` workflow with stages `package`, `plan`, and `apply`. The `plan` and `apply` stages need the processing service deployed in the same account; this service no longer reads its Terraform state (see [the decision](../decisions/0001-processor-route-wildcard.md)). Nothing from this repository is deployed. See [the runbook](../runbook.md).
 
 PR 11 also adds a manual `AWS integration` workflow: it creates a bucket and queue named after the run, checks concurrent conditional creates, stale-ETag rejection, immutable-record collisions, missing-key 404s, and SQS redelivery with the real SDK, and always deletes the resources. Its first run (2026-10-03, run 37145359141) failed at queue creation because the deployment role lacked `sqs:CreateQueue`; the tests did not start. It uses the deployment role, not the service roles, so it does not prove the service IAM policies.
 
@@ -61,4 +61,4 @@ The isolated manual `Load and resource` workflow runs 64-MiB streamed CSV, 32-Mi
 
 Independent review of PR 11/12 and the load workflow (2026-10-04) found no blocker in the local load fixtures or smoke harness. It identified two release gaps: missing mandatory AWS integration and processor/hosted-zone preflight after AWS mutation. Pull request #9 addresses both in workflow code, and independent exact-head re-review found no blocker. Live release verification remains outstanding.
 
-Next: the AWS integration workflow needs a narrowly scoped `sqs:CreateQueue` grant to the deployment role before a live `plan` or `apply`; processor state and deployed endpoint are also required. Live AWS/source tests remain deferred until release.
+Next: the AWS integration workflow needs a narrowly scoped `sqs:CreateQueue` grant to the deployment role before a live `plan` or `apply`; the deployed processor endpoint is also required. Live AWS/source tests remain deferred until release.

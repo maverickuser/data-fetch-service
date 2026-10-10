@@ -38,8 +38,6 @@ jobs:
       RELEASE_STAGE: ${{ inputs.stage }}
       AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME }}
       HOSTED_ZONE_ID: ${{ vars.HOSTED_ZONE_ID }}
-      PROCESSOR_STATE_BUCKET: ${{ vars.PROCESSOR_STATE_BUCKET }}
-      PROCESSOR_STATE_KEY: ${{ vars.PROCESSOR_STATE_KEY }}
       SMOKE_NSDL_ISIN: ${{ vars.SMOKE_NSDL_ISIN }}
     steps:
       - name: Check required inputs before AWS mutations
@@ -47,10 +45,8 @@ jobs:
           set -euo pipefail
           missing=0
           if [ -z "$AWS_ROLE_TO_ASSUME" ]; then echo '::error::AWS_ROLE_TO_ASSUME is not configured'; missing=1; fi
-          if [ "$RELEASE_STAGE" != package ]; then
-            for name in HOSTED_ZONE_ID PROCESSOR_STATE_BUCKET PROCESSOR_STATE_KEY; do
-              if [ -z "${!name}" ]; then echo "::error::$name is not configured"; missing=1; fi
-            done
+          if [ "$RELEASE_STAGE" != package ] && [ -z "$HOSTED_ZONE_ID" ]; then
+            echo '::error::HOSTED_ZONE_ID is not configured'; missing=1
           fi
           if [ "$RELEASE_STAGE" = apply ] && [ -z "$SMOKE_NSDL_ISIN" ]; then
             echo '::error::SMOKE_NSDL_ISIN is not configured'; missing=1
@@ -83,11 +79,7 @@ jobs:
           if ! jq -e '.HostedZone.Name == "kagent.app." and .HostedZone.Config.PrivateZone == false' "$RUNNER_TEMP/hosted-zone.json" >/dev/null; then
             echo '::error::HOSTED_ZONE_ID must identify the public kagent.app. zone'; exit 1
           fi
-          aws s3api get-object --bucket "$PROCESSOR_STATE_BUCKET" --key "$PROCESSOR_STATE_KEY" "$RUNNER_TEMP/processor-state.json" >/dev/null
-          endpoint=$(jq -er '.outputs.processor_api_endpoint.value | select(type == "string" and startswith("https://"))' "$RUNNER_TEMP/processor-state.json")
-          if [ "$endpoint" != 'https://processing.kagent.app/v1/event-ingestions' ]; then echo '::error::Processor endpoint differs from the service contract'; exit 1; fi
-          jq -e --arg region "$AWS_REGION" '.outputs.processor_submission_route_arn.value | type == "string" and test("^arn:aws:execute-api:" + $region + ":[0-9]{12}:[^/]+/[^/]+/POST/v1/event-ingestions$")' "$RUNNER_TEMP/processor-state.json" >/dev/null
-          curl --silent --show-error --output /dev/null --connect-timeout 5 --max-time 10 "$endpoint"
+          curl --silent --show-error --output /dev/null --connect-timeout 5 --max-time 10 'https://processing.kagent.app/v1/event-ingestions'
 
   aws-integration:
     name: AWS integration gate
@@ -200,8 +192,6 @@ jobs:
     env:
       TF_VAR_aws_region: ${{ vars.AWS_REGION || 'ap-south-1' }}
       TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
-      TF_VAR_processor_state_bucket: ${{ vars.PROCESSOR_STATE_BUCKET }}
-      TF_VAR_processor_state_key: ${{ vars.PROCESSOR_STATE_KEY }}
       TF_VAR_deployment_commit: ${{ github.sha }}
       TF_VAR_config_revision: ${{ needs.package.outputs.config_revision }}
       TF_VAR_package_bucket: ${{ needs.package.outputs.package_bucket }}
