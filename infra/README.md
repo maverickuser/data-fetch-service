@@ -24,20 +24,15 @@ terraform -chdir=infra/service init \
   -backend-config=use_lockfile=true
 ```
 
-## Required remote-state outputs
+## Processor submission route
 
-| State | Outputs |
-|---|---|
-| Processor | `processor_api_endpoint`, `processor_submission_route_arn` |
-
-Preconditions fail the plan when `processor_api_endpoint` is not `https://processing.kagent.app/v1/event-ingestions`, the route ARN is not one `POST /v1/event-ingestions` execute-api route in this region, or the endpoint differs from the bundled `processor.url`.
+The stack reads no processor Terraform state. The processor runs in the same AWS account, so the Delivery and Reconciler roles get `execute-api:Invoke` on `arn:aws:execute-api:{region}:{this account}:*/*/POST/v1/event-ingestions`: any API ID and stage, but only this account, region, method, and route. See [the decision record](../docs/decisions/0001-processor-route-wildcard.md). A precondition fails the plan when the bundled `processor.url` is not `https://processing.kagent.app/v1/event-ingestions`.
 
 ## Service inputs
 
 | Variable | Purpose |
 |---|---|
 | `hosted_zone_id` | Existing public `kagent.app` zone; this stack manages only the `fetch.kagent.app` alias and certificate-validation record |
-| `processor_state_*` | Location of the processor remote state |
 | `deployment_commit`, `config_revision`, `package_bucket`, `package_sha256` | Exact release: packages are read from `releases/{commit}/{config revision}/{kind}.zip` |
 | `external_producer_role_arns`, `native_eventbridge_rule_arns` | Approved senders to the ingress queue |
 | `processor_reader_role_arns` | Processor roles allowed to read `runs/*` in the artifact bucket |

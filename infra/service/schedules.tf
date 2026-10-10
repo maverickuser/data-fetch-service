@@ -15,8 +15,8 @@ resource "terraform_data" "configuration_contract" {
       error_message = "Terraform and bundled production configuration must select the same region and resource prefix."
     }
     precondition {
-      condition     = try(local.prod_config.processor.url, local.source_config.processor.url) == local.processor.processor_api_endpoint
-      error_message = "Bundled processor.url must equal the processor state's submission endpoint."
+      condition     = try(local.prod_config.processor.url, local.source_config.processor.url) == local.processor_api_endpoint
+      error_message = "Bundled processor.url must equal the processor submission endpoint."
     }
     precondition {
       condition     = length(local.schedules) == 1 && contains(keys(local.schedules), "daily-bhavcopy") && local.schedules["daily-bhavcopy"].schedule.expression == "cron(0 20 ? * MON-FRI *)" && local.schedules["daily-bhavcopy"].schedule.timezone == "Asia/Kolkata" && local.schedules["daily-bhavcopy"].schedule.inputs.exchangeName == "BSE"

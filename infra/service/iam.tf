@@ -100,7 +100,7 @@ resource "aws_iam_role_policy" "lambda" {
         Sid      = "SubmitToProcessorAPI"
         Effect   = "Allow"
         Action   = "execute-api:Invoke"
-        Resource = local.processor.processor_submission_route_arn
+        Resource = local.processor_submission_route_arn
       } if contains(local.processor_invokers, kind)]
     )
   })
