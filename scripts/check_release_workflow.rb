@@ -17,7 +17,16 @@ require_needs(jobs, 'package', ['preflight'])
 require_needs(jobs, 'aws-integration', ['preflight'])
 require_needs(jobs, 'deploy', ['package', 'aws-integration'])
 abort 'release must not apply the shared network; fetch Lambdas run outside any VPC' if jobs.key?('network')
-require_needs(jobs, 'smoke', ['deploy'])
+require_needs(jobs, 'apply', ['deploy'])
+require_needs(jobs, 'smoke', ['apply'])
+
+apply = jobs.fetch('apply')
+abort 'apply must run in the approval-gated prod-apply environment' unless apply['environment'] == 'prod-apply'
+apply_commands = Array(apply['steps']).map { |step| step['run'].to_s }.join("\n")
+unless apply_commands.include?('reviewed-plan/infra/service/service.tfplan') && !apply_commands.include?('-auto-approve')
+  abort 'apply must apply the reviewed saved plan, not a fresh one'
+end
+abort 'deploy must only plan the service stack' if Array(jobs.fetch('deploy')['steps']).any? { |step| step['run'].to_s.include?('terraform -chdir=infra/service apply') }
 
 unless jobs.fetch('aws-integration').fetch('uses') == './.github/workflows/aws-integration.yml'
   abort 'release must call the disposable-resource AWS integration workflow'

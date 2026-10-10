@@ -9,18 +9,21 @@ Everything runs from the manual `Release` workflow (Actions → Release → Run 
 | Stage | What it does | What it creates in AWS |
 |---|---|---|
 | `package` | Runs all CI gates, builds the five Lambda ZIPs, uploads them | State bucket `data-fetch-service-terraform-state`, package bucket `data-fetch-service-packages`, five objects under `releases/{commit}/{config revision}/` |
-| `plan` | The above, then plans the service stack | Nothing more |
-| `apply` | The above, then applies the plan and runs the smoke suite | The whole service |
+| `plan` | The above, then plans the service stack and publishes the plan | Nothing more |
+| `apply` | The above, then waits for approval, applies that exact plan, and runs the smoke suite | The whole service |
+
+At `apply`, the `Plan service` job publishes a summary of resource changes in the run summary and the full plan as the `service-plan` artifact. The `Apply reviewed plan` job runs in the GitHub environment `prod-apply`; configure required reviewers on it, or the plan is applied without a pause. The approver reads the plan, then approves; that saved plan is applied, and Terraform rejects it if the state changed after planning. The apply job publishes the deployed commit, configuration revision, and Terraform outputs in the run summary and as the `deployment-outputs` artifact.
 
 A package is never overwritten: re-running a commit re-uses its objects, and a differing ZIP under the same key fails the run.
 
-Before any stage mutates AWS, a read-only preflight checks the deployment role and ownership/availability of the fixed state and package bucket names. For `plan` and `apply`, it also requires the hosted-zone input, checks the hosted-zone name, and confirms that the processor endpoint is reachable. Both stages must pass the disposable-resource AWS integration workflow before the service stack is planned. A failed preflight prevents package-bucket changes. If AWS integration fails, the package stage may already have run, but the service stack is not planned or applied.
+Before any stage mutates AWS, a read-only preflight checks the deployment role and ownership/availability of the fixed state and package bucket names. For `plan` and `apply`, it also requires the hosted-zone input, checks the hosted-zone name, and confirms that the processor endpoint and the BSE and NSDL source hosts are reachable. For `apply`, it also requires `PROCESSOR_READER_ROLE_ARNS` to list at least one existing IAM role in this account and NSDL to return HTTP 200 for `SMOKE_NSDL_ISIN`. Both stages must pass the disposable-resource AWS integration workflow before the service stack is planned. A failed preflight prevents package-bucket changes. If AWS integration fails, the package stage may already have run, but the service stack is not planned or applied.
 
 Required repository configuration:
 
 - Secret `AWS_ROLE_TO_ASSUME`.
-- Variable `HOSTED_ZONE_ID` (needed from `plan` onward), `SMOKE_NSDL_ISIN` (needed for `apply`).
-- Optional variables: `AWS_REGION` (default `ap-south-1`), `ENABLE_INGRESS_CONSUMPTION` and `ENABLE_BSE_SCHEDULE` (default `false`), `EXTERNAL_PRODUCER_ROLE_ARNS` and `PROCESSOR_READER_ROLE_ARNS` (JSON lists, default `[]`), `SMOKE_BSE_FALLBACK_WEEKDAYS`.
+- Variable `HOSTED_ZONE_ID` (needed from `plan` onward); `SMOKE_NSDL_ISIN` and `PROCESSOR_READER_ROLE_ARNS` (a JSON list of the processor's role ARNs, needed for `apply`).
+- Environments `prod` and `prod-apply`, with required reviewers on `prod-apply`.
+- Optional variables: `AWS_REGION` (default `ap-south-1`), `ENABLE_INGRESS_CONSUMPTION` and `ENABLE_BSE_SCHEDULE` (default `false`), `EXTERNAL_PRODUCER_ROLE_ARNS` (JSON list, default `[]`), `SMOKE_BSE_FALLBACK_WEEKDAYS`.
 
 First rollout order: the processing service must be deployed first, because delivery submits to its `POST /v1/event-ingestions` route in the same account. `config/environments/prod.yaml` sets `processor.enabled: true`, so delivery submits to the processor as soon as runs complete. Release with both activation switches `false`, then set `ENABLE_INGRESS_CONSUMPTION` and `ENABLE_BSE_SCHEDULE` to `true` and release again. The smoke suite's schedule check fails while `ENABLE_BSE_SCHEDULE` is `false`.
 
@@ -35,7 +38,7 @@ The manual `Load and resource` workflow uses isolated in-memory source responses
 
 ## Rolling back
 
-Code and configuration roll back together. Run `Release` at stage `apply` from the earlier commit (Run workflow → pick the tag or branch at that commit). Its packages are still in the package bucket, so the Lambdas return to exactly that build and configuration revision. Check the plan output before the apply step for anything other than Lambda code and environment changes.
+Code and configuration roll back together. Run `Release` at stage `apply` from the earlier commit (Run workflow → pick the tag or branch at that commit). Its packages are still in the package bucket, so the Lambdas return to exactly that build and configuration revision. Before approving `prod-apply`, check the `service-plan` artifact for anything other than Lambda code and environment changes.
 
 ## Operating
 
