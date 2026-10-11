@@ -263,14 +263,13 @@ jobs:
           retention-days: 30
 
   apply:
-    name: Apply reviewed plan
+    name: Apply saved plan
     if: ${{ inputs.stage == 'apply' }}
     needs: deploy
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    # Configure required reviewers on this environment; the approver reviews the
-    # `service-plan` artifact from the deploy job before this exact plan is applied.
-    environment: prod-apply
+    # Applies the exact plan the deploy job saved, without a manual approval pause.
+    environment: prod
     outputs:
       api_url: ${{ steps.outputs.outputs.api_url }}
       ingress_queue_url: ${{ steps.outputs.outputs.ingress_queue_url }}

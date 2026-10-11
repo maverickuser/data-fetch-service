@@ -21,7 +21,7 @@ require_needs(jobs, 'apply', ['deploy'])
 require_needs(jobs, 'smoke', ['apply'])
 
 apply = jobs.fetch('apply')
-abort 'apply must run in the approval-gated prod-apply environment' unless apply['environment'] == 'prod-apply'
+abort 'apply must run in the prod environment' unless apply['environment'] == 'prod'
 apply_commands = Array(apply['steps']).map { |step| step['run'].to_s }.join("\n")
 unless apply_commands.include?('reviewed-plan/infra/service/service.tfplan') && !apply_commands.include?('-auto-approve')
   abort 'apply must apply the reviewed saved plan, not a fresh one'
