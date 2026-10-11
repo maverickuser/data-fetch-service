@@ -10,7 +10,7 @@ Everything runs from the manual `Release` workflow (Actions → Release → Run 
 |---|---|---|
 | `package` | Runs all CI gates, builds the five Lambda ZIPs, uploads them | State bucket `data-fetch-service-terraform-state`, package bucket `data-fetch-service-packages`, five objects under `releases/{commit}/{config revision}/` |
 | `plan` | The above, then plans the service stack and publishes the plan | Nothing more |
-| `apply` | The above, then waits for approval, applies that exact plan, and runs the smoke suite | The whole service |
+| `apply` | The above, then applies that exact plan. It runs no smoke suite | The whole service |
 
 At `apply`, the `Plan service` job publishes a summary of resource changes in the run summary and the full plan as the `service-plan` artifact. The `Apply saved plan` job then applies that saved plan without a manual approval pause; Terraform rejects it if the state changed after planning. To review changes before they reach AWS, run stage `plan` first and read its `service-plan` artifact. The apply job publishes the deployed commit, configuration revision, and Terraform outputs in the run summary and as the `deployment-outputs` artifact.
 
@@ -20,14 +20,14 @@ Before any stage mutates AWS, a read-only preflight checks the deployment role a
 
 Required repository configuration:
 
-- Secret `AWS_ROLE_TO_ASSUME`. The smoke suite signs its POST requests with this role, so it needs `execute-api:Invoke` on the service's `api_post_invoke_arn` output.
+- Secret `AWS_ROLE_TO_ASSUME`. To sign POST requests with this role, for example from the manual `Smoke` workflow, it needs `execute-api:Invoke` on the service's `api_post_invoke_arn` output.
 - Secret `HOSTED_ZONE_ID` (needed from `plan` onward); secrets `SMOKE_NSDL_ISIN` and `PROCESSOR_READER_ROLE_ARNS` (a JSON list of the processor's role ARNs, from its `source_reader_role_arns` output, needed for `apply`). GitHub masks secret values, so logs and the Terraform plan show them as `***`.
 - Environment `prod`; every release job runs in it.
 - Optional variables: `AWS_REGION` (default `ap-south-1`), `ENABLE_INGRESS_CONSUMPTION` and `ENABLE_BSE_SCHEDULE` (default `false`), `EXTERNAL_PRODUCER_ROLE_ARNS` (JSON list, default `[]`), `SMOKE_BSE_FALLBACK_WEEKDAYS`.
 
-First rollout order: the processing service must be deployed first, because delivery submits to its `POST /v1/event-ingestions` route in the same account. `config/environments/prod.yaml` sets `processor.enabled: true`, so delivery submits to the processor as soon as runs complete. Release with both activation switches `false`, then set `ENABLE_INGRESS_CONSUMPTION` and `ENABLE_BSE_SCHEDULE` to `true` and release again. The smoke suite's schedule check fails while `ENABLE_BSE_SCHEDULE` is `false`.
+First rollout order: the processing service must be deployed first, because delivery submits to its `POST /v1/event-ingestions` route in the same account. `config/environments/prod.yaml` sets `processor.enabled: true`, so delivery submits to the processor as soon as runs complete. Release with both activation switches `false`, then set `ENABLE_INGRESS_CONSUMPTION` and `ENABLE_BSE_SCHEDULE` to `true` and release again.
 
-A failed smoke suite fails the workflow. It does not undo the applied infrastructure.
+The release no longer runs the smoke suite (2026-10-11); the suite is being redesigned. Until then, verify a deployment with a manual BSE and NSDL run through the API. The manual `Smoke` workflow still exists but expects an enabled BSE schedule and ingress consumption, so it fails against the initial rollout.
 
 ## Verifying AWS behaviour
 

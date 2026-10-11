@@ -18,7 +18,7 @@ require_needs(jobs, 'aws-integration', ['preflight'])
 require_needs(jobs, 'deploy', ['package', 'aws-integration'])
 abort 'release must not apply the shared network; fetch Lambdas run outside any VPC' if jobs.key?('network')
 require_needs(jobs, 'apply', ['deploy'])
-require_needs(jobs, 'smoke', ['apply'])
+abort 'release must not run the smoke suite until it is redesigned' if jobs.key?('smoke')
 
 apply = jobs.fetch('apply')
 abort 'apply must run in the prod environment' unless apply['environment'] == 'prod'
