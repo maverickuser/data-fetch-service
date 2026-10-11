@@ -15,6 +15,7 @@ import (
 	"github.com/maverickuser/data-fetch-service/internal/admission"
 	"github.com/maverickuser/data-fetch-service/internal/config"
 	"github.com/maverickuser/data-fetch-service/internal/domain"
+	"github.com/maverickuser/data-fetch-service/internal/events"
 	"github.com/maverickuser/data-fetch-service/internal/state"
 )
 
@@ -78,7 +79,11 @@ func handlerFixture(t *testing.T) (*Handler, *apiFake) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &apiFake{result: admission.Result{RunID: "run", Status: domain.Queued, StatusURL: "/v1/runs/run"}, view: state.RunView{RunID: "run", Phase: domain.Queued}, coord: state.Coordination{ActiveRunID: "run"}, records: map[string]state.Object{}}
+	snapshot, err := events.BuildSnapshot(cfg, events.Normalized{EventID: "event", Source: "urn:bond-platform:manual", EventType: "daily-bhavcopy", Inputs: map[string]any{"exchangeName": "BSE", "run_date": "2026-10-01"}, OccurredAt: time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)}, "run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &apiFake{result: admission.Result{RunID: "run", Status: domain.Queued, StatusURL: "/v1/runs/run"}, view: state.RunView{RunID: "run", Phase: domain.Queued, Snapshot: snapshot}, coord: state.Coordination{ActiveRunID: "run"}, records: map[string]state.Object{}}
 	return &Handler{Service: f, Recovery: f, DeliveryRecovery: f, Coordinator: f, Store: f, Config: cfg, Now: func() time.Time { return time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC) }}, f
 }
 
@@ -219,8 +224,75 @@ func TestReadRoutesAndErrorStatuses(t *testing.T) {
 	}
 	f.err = nil
 	f.view.Snapshot = json.RawMessage(`{`)
-	if w := call(h, "GET", "/v1/runs/run", ""); w.Code != 500 {
+	if w := call(h, "GET", "/v1/runs/run", ""); w.Code != 409 {
 		t.Fatal(w.Code)
+	}
+}
+
+func TestRunDetailShowsOwnEventAndSubmission(t *testing.T) {
+	h, f := handlerFixture(t)
+	stored := append(json.RawMessage(nil), f.view.Snapshot...)
+	var detail struct {
+		DataSchema string          `json:"dataschema"`
+		Submission json.RawMessage `json:"submission"`
+		Snapshot   struct {
+			ConfigRevision string `json:"config_revision"`
+			Config         struct {
+				Processor struct{ URL string }  `json:"processor"`
+				Events    []struct{ ID string } `json:"events"`
+			} `json:"config"`
+		} `json:"snapshot"`
+	}
+	w := call(h, "GET", "/v1/runs/run", "")
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &detail) != nil {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if detail.DataSchema != "urn:bond-platform:dataset:bse-debt-trades" || len(detail.Snapshot.Config.Events) != 1 || detail.Snapshot.Config.Events[0].ID != "daily-bhavcopy" || detail.Snapshot.Config.Processor.URL == "" || detail.Snapshot.ConfigRevision != h.Config.Revision() || detail.Submission != nil {
+		t.Fatal(w.Body.String())
+	}
+	if string(f.view.Snapshot) != string(stored) {
+		t.Fatal("stored snapshot changed")
+	}
+
+	f.records["runs/run/delivery/submission.json"] = state.Object{Data: []byte(`{"dataschema":"urn:bond-platform:dataset:bse-debt-trades"}`)}
+	if w := call(h, "GET", "/v1/runs/run", ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"submission":{"dataschema":"urn:bond-platform:dataset:bse-debt-trades"}`) {
+		t.Fatal(w.Code, w.Body.String())
+	}
+
+	nsdl, err := events.BuildSnapshot(h.Config, events.Normalized{EventID: "event", Source: "urn:bond-platform:manual", EventType: "nsdl-bond-data", Inputs: map[string]any{"isin_code": "INE831R08076"}, OccurredAt: time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)}, "run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.view.Snapshot = nsdl
+	if w := call(h, "GET", "/v1/runs/run", ""); w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &detail) != nil || detail.DataSchema != "urn:bond-platform:dataset:nsdl-security" || len(detail.Snapshot.Config.Events) != 1 || detail.Snapshot.Config.Events[0].ID != "nsdl-bond-data" {
+		t.Fatal(w.Code, w.Body.String())
+	}
+
+	f.readErr = state.ErrNotFound
+	if w := call(h, "GET", "/v1/runs/run", ""); w.Code != 200 || strings.Contains(w.Body.String(), `"submission"`) {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	f.readErr = errors.New("throttled")
+	if w := call(h, "GET", "/v1/runs/run", ""); w.Code != 503 {
+		t.Fatal(w.Code)
+	}
+	f.readErr = nil
+}
+
+func TestRunSnapshotRejectsMissingOrDuplicateDefinitions(t *testing.T) {
+	for _, raw := range []string{
+		`[]`,
+		`{"event":1,"config":{"events":[]}}`,
+		`{"event":{"EventType":"a"},"config":[]}`,
+		`{"event":{"EventType":"a"},"config":{"events":{}}}`,
+		`{"event":{"EventType":"a"},"config":{"events":[1]}}`,
+		`{"event":{"EventType":"a"},"config":{"events":[{"id":"b","dataset_type":"urn:b"}]}}`,
+		`{"event":{"EventType":"a"},"config":{"events":[{"id":"a"}]}}`,
+		`{"event":{"EventType":"a"},"config":{"events":[{"id":"a","dataset_type":"urn:a"},{"id":"a","dataset_type":"urn:a"}]}}`,
+	} {
+		if _, _, err := runSnapshot(json.RawMessage(raw)); !errors.Is(err, state.ErrIntegrity) {
+			t.Fatal(raw, err)
+		}
 	}
 }
 

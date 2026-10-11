@@ -238,16 +238,17 @@ paths:
       operationId: getRun
       summary: Read a run
       description: |
-        Returns the run's phase, timing, links to parent and retry runs, and the
-        immutable snapshot it was admitted with. Follow `latest_run_id` to the
-        newest automatic retry.
+        Returns the run's phase, timing, links to parent and retry runs, its
+        dataset URN, the snapshot it was admitted with narrowed to its own
+        event definition, and the exact submission sent to the processor once
+        one was built. Follow `latest_run_id` to the newest automatic retry.
       responses:
         '200':
           description: The run.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RunView'
+                $ref: '#/components/schemas/RunDetail'
         '400':
           $ref: '#/components/responses/InvalidRequest'
         '404':
@@ -758,11 +759,32 @@ components:
           $ref: '#/components/schemas/RunId'
         latest_phase:
           $ref: '#/components/schemas/Phase'
+    RunDetail:
+      allOf:
+        - $ref: '#/components/schemas/RunView'
+        - type: object
+          required: [dataschema]
+          properties:
+            dataschema:
+              type: string
+              description: Dataset contract URN the processor selects by, from the run's event definition.
+              examples:
+                - urn:bond-platform:dataset:bse-debt-trades
+                - urn:bond-platform:dataset:nsdl-security
+            submission:
+              type: object
+              additionalProperties: true
+              description: |
+                The CloudEvent posted to the processor, byte-for-byte as stored and
+                reused on every delivery attempt. Absent until delivery builds it.
+                Attempts and acceptance are under `/v1/runs/{run_id}/delivery`.
     Snapshot:
       type: object
       description: |
         Immutable record of what the run was admitted with: resolved inputs and
-        date, resolved jobs, and the full configuration at that revision.
+        date, resolved jobs, and the configuration at that revision. Run detail
+        shows only the run's own event definition under `config.events`;
+        `config_revision` still identifies the full pinned configuration.
         Omitted from listings.
       additionalProperties: true
       properties:

@@ -239,14 +239,75 @@ func (h *Handler) event(w http.ResponseWriter, r *http.Request) {
 	h.write(w, http.StatusOK, map[string]any{"event": def, "config_revision": h.Config.Revision()})
 }
 
-// run returns the pinned snapshot and status reconstructed from immutable history.
+// runDetail is the run status with its dataset URN and the processor submission once one was built.
+type runDetail struct {
+	state.RunView
+	DataSchema string          `json:"dataschema"`
+	Submission json.RawMessage `json:"submission,omitempty"`
+}
+
+// run returns status reconstructed from immutable history, the pinned snapshot narrowed to the
+// run's own event definition, and the exact submission sent to the processor.
 func (h *Handler) run(w http.ResponseWriter, r *http.Request) {
 	view, err := h.Coordinator.ReadRun(r.Context(), r.PathValue("run_id"))
 	if err != nil {
 		h.fail(w, err)
 		return
 	}
-	h.write(w, http.StatusOK, view)
+	snapshot, dataSchema, err := runSnapshot(view.Snapshot)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	view.Snapshot = snapshot
+	detail := runDetail{RunView: view, DataSchema: dataSchema}
+	object, err := h.Store.Read(r.Context(), "runs/"+view.RunID+"/delivery/submission.json", h.Now())
+	switch {
+	case err == nil:
+		detail.Submission = object.Data
+	case !errors.Is(err, state.ErrNotFound):
+		h.fail(w, err)
+		return
+	}
+	h.write(w, http.StatusOK, detail)
+}
+
+// runSnapshot drops other events' definitions from the pinned configuration and returns the
+// run's dataset URN. The stored snapshot is unchanged; a snapshot without exactly one
+// definition for its event is an integrity failure.
+func runSnapshot(raw json.RawMessage) (json.RawMessage, string, error) {
+	var snapshot, cfg map[string]json.RawMessage
+	var event struct{ EventType string }
+	var definitions []json.RawMessage
+	if json.Unmarshal(raw, &snapshot) != nil || json.Unmarshal(snapshot["event"], &event) != nil || json.Unmarshal(snapshot["config"], &cfg) != nil || json.Unmarshal(cfg["events"], &definitions) != nil {
+		return nil, "", state.ErrIntegrity
+	}
+	var kept []json.RawMessage
+	var dataSchema string
+	for _, definition := range definitions {
+		var def struct {
+			ID          string `json:"id"`
+			DatasetType string `json:"dataset_type"`
+		}
+		if json.Unmarshal(definition, &def) != nil {
+			return nil, "", state.ErrIntegrity
+		}
+		if def.ID == event.EventType {
+			kept, dataSchema = append(kept, definition), def.DatasetType
+		}
+	}
+	if len(kept) != 1 || dataSchema == "" {
+		return nil, "", state.ErrIntegrity
+	}
+	var err error
+	if cfg["events"], err = json.Marshal(kept); err != nil {
+		return nil, "", err
+	}
+	if snapshot["config"], err = json.Marshal(cfg); err != nil {
+		return nil, "", err
+	}
+	narrowed, err := json.Marshal(snapshot)
+	return narrowed, dataSchema, err
 }
 
 // history requires an unexpired run and returns one bounded transition page.
