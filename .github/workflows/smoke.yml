@@ -22,7 +22,7 @@ jobs:
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'ap-south-1' }}
       SMOKE_API_URL: ${{ vars.SMOKE_API_URL }}
-      SMOKE_NSDL_ISIN: ${{ vars.SMOKE_NSDL_ISIN }}
+      SMOKE_NSDL_ISIN: ${{ secrets.SMOKE_NSDL_ISIN }}
       SMOKE_INGRESS_QUEUE_URL: ${{ vars.SMOKE_INGRESS_QUEUE_URL }}
       SMOKE_ARTIFACT_BUCKET: ${{ vars.SMOKE_ARTIFACT_BUCKET }}
       SMOKE_BSE_FALLBACK_WEEKDAYS: ${{ inputs.fallback_weekdays }}
