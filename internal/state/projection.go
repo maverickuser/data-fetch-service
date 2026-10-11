@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -74,7 +75,7 @@ func (c *Coordinator) ReadRun(ctx context.Context, runID string) (RunView, error
 	seen := map[string]bool{runID: true}
 	for i := view.ExecutionRetryIndex; i < 3; i++ {
 		object, err := c.store.Read(ctx, "runs/"+latest.RunID+"/automatic-retry.json", c.now())
-		if err == ErrNotFound {
+		if errors.Is(err, ErrNotFound) {
 			break
 		}
 		if err != nil {
@@ -89,7 +90,7 @@ func (c *Coordinator) ReadRun(ctx context.Context, runID string) (RunView, error
 		}
 		child, err := c.readRunBase(ctx, link.ChildRunID)
 		if err != nil {
-			if err == ErrNotFound {
+			if errors.Is(err, ErrNotFound) {
 				coordination, _, loadErr := c.Load(ctx, "coordination/"+snapshotExecutionKey(latest.Snapshot)+".json")
 				if loadErr == nil && coordination.Retry != nil && coordination.Retry.ParentRunID == link.ParentRunID && coordination.Retry.ChildRunID == link.ChildRunID {
 					if latest.RunID == view.RunID {

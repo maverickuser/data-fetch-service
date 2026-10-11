@@ -145,3 +145,16 @@ func TestHistoryRejectsWrongPrefixAndMissingObjects(t *testing.T) {
 		}
 	}
 }
+
+func TestReadRunTreatsS3MissingRetryLinkAsNoRetry(t *testing.T) {
+	m := newMemory()
+	c := NewCoordinator(New(s3NotFoundObjects{m}), func() time.Time { return m.now })
+	admitUntilResolved(t, c, request(t, m, "one", "run"))
+	view, err := c.ReadRun(context.Background(), "run")
+	if err != nil || view.RunID != "run" || view.LatestRunID != "run" || view.Phase != domain.Queued {
+		t.Fatal(view, err)
+	}
+	if _, err := c.ReadRun(context.Background(), "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatal(err)
+	}
+}
