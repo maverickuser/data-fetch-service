@@ -877,7 +877,7 @@ Successful new admission returns 202 with `{run_id, status, reused:false, status
 
 All POST routes accept an optional `Idempotency-Key`; callers should supply one when retrying timed-out requests. Without it, each submitted request is a new trigger subject to active-run joining and content deduplication. Processor idempotency remains keyed by the resulting run ID regardless of this header.
 
-Run detail includes the immutable event snapshot, not just current YAML. Do not expose raw source response bodies or unbounded HTTP error bodies in API responses.
+Run detail includes the immutable event snapshot, not just current YAML. The stored snapshot pins the full configuration so `config_revision` and retries stay exact; the run detail response narrows `config.events` to the run's own definition, adds its `dataschema` (`urn:bond-platform:dataset:bse-debt-trades` for `daily-bhavcopy`, `urn:bond-platform:dataset:nsdl-security` for `nsdl-bond-data`), and includes the stored processor submission once delivery built it. Do not expose raw source response bodies or unbounded HTTP error bodies in API responses.
 
 Listings are partitioned by event type and UTC creation date. Read the immutable listing entries and project status from each run's history. Default range is one day, maximum 30 days, default limit 25, maximum 100. Cursors carry date partition, S3 continuation position, and filter version. Ordering is ascending creation time initially; do not claim database-style arbitrary sorting or efficient global status queries. Repair missing listing entries during reconciliation.
 
