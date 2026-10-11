@@ -11,8 +11,8 @@ info:
       configured work and read run history. Request bodies only select
       configured events; they cannot supply source URLs, S3 keys, or processor
       destinations.
-    - **Throttling:** API Gateway allows 10 requests per second with bursts of
-      20. Excess requests get `429`.
+    - **Throttling:** API Gateway allows 10 requests per second with bursts
+      of 20. Excess requests get `429`.
     - **Asynchronous work:** POST routes return as soon as the run is durably
       admitted. Poll `status_url` (`GET /v1/runs/{run_id}`) for progress.
     - **Idempotency:** every POST accepts an optional `Idempotency-Key` header

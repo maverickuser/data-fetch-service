@@ -160,6 +160,9 @@ func TestDocsRoutesServeDocumentAndViewer(t *testing.T) {
 	if !strings.Contains(body, `url: "/docs/openapi.yaml"`) || strings.Count(body, `integrity="sha384-`) != 2 {
 		t.Fatal("viewer must load the served document with integrity-checked assets")
 	}
+	if !strings.Contains(body, "validatorUrl: null") {
+		t.Fatal("viewer must not call the external validator, which its CSP blocks")
+	}
 	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'none'") || !strings.Contains(csp, "connect-src 'self'") {
 		t.Fatalf("viewer CSP = %q", csp)
 	}

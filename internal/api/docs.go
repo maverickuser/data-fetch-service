@@ -23,7 +23,7 @@ const docsViewerPage = `<!doctype html>
 <div id="swagger-ui"></div>
 <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.17.14/swagger-ui-bundle.js" integrity="sha384-wmyclcVGX/WhUkdkATwhaK1X1JtiNrr2EoYJ+diV3vj4v6OC5yCeSu+yW13SYJep" crossorigin="anonymous"></script>
 <script>
-SwaggerUIBundle({url: "/docs/openapi.yaml", dom_id: "#swagger-ui", deepLinking: true});
+SwaggerUIBundle({url: "/docs/openapi.yaml", dom_id: "#swagger-ui", deepLinking: true, validatorUrl: null});
 </script>
 </body>
 </html>
