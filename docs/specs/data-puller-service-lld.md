@@ -869,6 +869,8 @@ API Gateway HTTP API fronts the Go API Lambda. No authentication initially, as a
 | `GET /v1/events/{event_type}/active?inputs=...` | Active run for normalized URL-encoded JSON inputs |
 | `GET /v1/requests/{producer}/{event_id}` | Resolve an external trigger to its run ID |
 
+The client-facing contract is the OpenAPI document [`internal/api/openapi.yaml`](../../internal/api/openapi.yaml), served at `GET /docs/openapi.yaml` with Swagger UI at `GET /docs`; see the [API guide](../api.md). Those two documentation routes are public like the rest of the API.
+
 Successful new admission returns 202 with `{run_id, status, reused:false, status_url}`. Joining an active run returns 202 with `reused:true`; replaying a completed idempotent request returns 200 with its existing result. Distinguish unknown resources (404), expired known resources (410 where evidence remains), conflicting requests (409), invalid input (400/422), and throttling (429).
 
 All POST routes accept an optional `Idempotency-Key`; callers should supply one when retrying timed-out requests. Without it, each submitted request is a new trigger subject to active-run joining and content deduplication. Processor idempotency remains keyed by the resulting run ID regardless of this header.

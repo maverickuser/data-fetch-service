@@ -59,20 +59,37 @@ type Records interface {
 	Read(context.Context, string, time.Time) (state.Object, error)
 }
 
-// Routes binds manual admission, full rerun, and bounded read resources.
+// route pairs one "METHOD /path" pattern with its handler.
+type route struct {
+	pattern string
+	handle  http.HandlerFunc
+}
+
+// routes lists every public route; the OpenAPI document and API Gateway routes must match it.
+func (h *Handler) routes() []route {
+	return []route{
+		{"POST /v1/events/{event_type}/runs", h.manual},
+		{"POST /v1/runs/{run_id}/reruns", h.fullRerun},
+		{"POST /v1/runs/{run_id}/delivery-retries", h.deliveryRetry},
+		{"GET /v1/events/{event_type}", h.event},
+		{"GET /v1/events/{event_type}/active", h.active},
+		{"GET /v1/events/{event_type}/runs", h.listRuns},
+		{"GET /v1/runs/{run_id}", h.run},
+		{"GET /v1/runs/{run_id}/history", h.history},
+		{"GET /v1/runs/{run_id}/pulls", h.records},
+		{"GET /v1/runs/{run_id}/delivery", h.records},
+		{"GET /v1/requests/{producer}/{event_id}", h.request},
+		{"GET /docs", serveDocsViewer},
+		{"GET /docs/openapi.yaml", serveOpenAPI},
+	}
+}
+
+// Routes binds manual admission, full rerun, bounded read resources, and the API description.
 func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/events/{event_type}/runs", h.manual)
-	mux.HandleFunc("POST /v1/runs/{run_id}/reruns", h.fullRerun)
-	mux.HandleFunc("POST /v1/runs/{run_id}/delivery-retries", h.deliveryRetry)
-	mux.HandleFunc("GET /v1/events/{event_type}", h.event)
-	mux.HandleFunc("GET /v1/events/{event_type}/active", h.active)
-	mux.HandleFunc("GET /v1/events/{event_type}/runs", h.listRuns)
-	mux.HandleFunc("GET /v1/runs/{run_id}", h.run)
-	mux.HandleFunc("GET /v1/runs/{run_id}/history", h.history)
-	mux.HandleFunc("GET /v1/runs/{run_id}/pulls", h.records)
-	mux.HandleFunc("GET /v1/runs/{run_id}/delivery", h.records)
-	mux.HandleFunc("GET /v1/requests/{producer}/{event_id}", h.request)
+	for _, r := range h.routes() {
+		mux.HandleFunc(r.pattern, r.handle)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(r.URL.RawQuery) > 16<<10 {
 			h.fail(w, admission.ErrInvalid)
