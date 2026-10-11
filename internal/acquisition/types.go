@@ -11,6 +11,7 @@ type Limits struct {
 	MaxDownloadBytes, MaxExtractedBytes, MaxTokenBytes, MaxZipMetadataBytes int64
 	MaxZipEntries, MaxCompressionRatio, MaxJSONDepth, MaxAttempts           int
 	RequestTimeout                                                          time.Duration
+	UserAgent                                                               string
 }
 
 // Artifact describes a completely uploaded object and the hash of its unchanged bytes.

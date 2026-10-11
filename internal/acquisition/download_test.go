@@ -31,11 +31,14 @@ func TestDownloadCompleteAndCleanup(t *testing.T) {
 				if r.Header.Get("Accept-Encoding") != "identity" {
 					t.Fatal("encoding")
 				}
+				if r.Header.Get("User-Agent") != "agent/1" {
+					t.Fatal("user agent")
+				}
 				return &http.Response{StatusCode: 200, ContentLength: size, Header: http.Header{"Content-Type": {"application/json"}}, Body: body}, nil
 			})
 			budget := NewBudget(10)
 			dir := t.TempDir()
-			d, status, err := DownloadSource(context.Background(), client, budget, Limits{MaxDownloadBytes: 10, RequestTimeout: time.Second}, "https://example.com/a.json", "json", dir, time.Now())
+			d, status, err := DownloadSource(context.Background(), client, budget, Limits{MaxDownloadBytes: 10, RequestTimeout: time.Second, UserAgent: "agent/1"}, "https://example.com/a.json", "json", dir, time.Now())
 			if err != nil || status != 200 {
 				t.Fatal(status, err)
 			}

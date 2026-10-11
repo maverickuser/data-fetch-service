@@ -44,6 +44,8 @@ type Defaults struct {
 	MaxJSONDepth            int   `yaml:"max_json_depth" json:"max_json_depth"`
 	MaxZipMetadataBytes     int64 `yaml:"max_zip_metadata_bytes" json:"max_zip_metadata_bytes"`
 	MaxTempBytes            int64 `yaml:"max_temp_bytes" json:"max_temp_bytes"`
+	// SourceUserAgent is sent on every source request; BSE and NSDL reject Go's default.
+	SourceUserAgent string `yaml:"source_user_agent" json:"source_user_agent"`
 }
 
 // Processor configures the IAM-protected API Gateway admission endpoint.
@@ -202,6 +204,9 @@ func (c Config) Validate() error {
 	if c.Defaults.MaxDownloadBytes < 1 || c.Defaults.MaxExtractedBytes < 1 || c.Defaults.MaxZipEntries < 1 || c.Defaults.MaxCompressionRatio < 1 || c.Defaults.MaxValidationTokenBytes < 1 {
 		return errors.New("resource limits must be positive")
 	}
+	if !validUserAgent(c.Defaults.SourceUserAgent) {
+		return errors.New("defaults.source_user_agent must be 1-256 printable ASCII characters")
+	}
 	if c.Processor.RequestTimeoutSeconds < 1 || c.Processor.MaxAttempts < 1 {
 		return errors.New("invalid processor limits")
 	}
@@ -280,6 +285,19 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// validUserAgent reports whether value is a non-empty header value of printable ASCII.
+func validUserAgent(value string) bool {
+	if value == "" || len(value) > 256 {
+		return false
+	}
+	for _, r := range value {
+		if r < ' ' || r > '~' {
+			return false
+		}
+	}
+	return true
 }
 
 // validateHTTPS requires fixed HTTPS authority without credentials or fragments.
