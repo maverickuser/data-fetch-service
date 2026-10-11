@@ -12,6 +12,11 @@ output "api_url" {
   value = "https://${aws_apigatewayv2_domain_name.fetch_api.domain_name}"
 }
 
+output "api_post_invoke_arn" {
+  description = "Grant execute-api:Invoke on this ARN to roles that may start runs."
+  value       = "${aws_apigatewayv2_api.http.execution_arn}/*/POST/v1/*"
+}
+
 output "artifact_bucket" {
   value = aws_s3_bucket.artifacts.bucket
 }

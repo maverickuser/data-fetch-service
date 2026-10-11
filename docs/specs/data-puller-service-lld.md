@@ -853,7 +853,7 @@ Business failures that are durably recorded are acknowledged to SQS. Return an S
 
 ## 14. REST API
 
-API Gateway HTTP API fronts the Go API Lambda. No authentication initially, as agreed. Anyone with network access to the endpoint can trigger configured work and view its exposed history. Request bodies select configured events; they cannot supply arbitrary source URLs, contracts, S3 keys, or processor destinations. Use bounded bodies, pagination, concurrency, and API throttling.
+API Gateway HTTP API fronts the Go API Lambda and is reachable only at `https://fetch.kagent.app`; its default `execute-api` endpoint is disabled (2026-10-11). The three POST routes, which start work, require IAM authorization (SigV4 for `execute-api`): callers need `execute-api:Invoke` on the `api_post_invoke_arn` output ([decision](../decisions/0002-iam-auth-for-post-routes.md)). Read routes and `/docs` remain unauthenticated, so anyone with network access can view exposed run history. Request bodies select configured events; they cannot supply arbitrary source URLs, contracts, S3 keys, or processor destinations. Use bounded bodies, pagination, concurrency, and API throttling.
 
 | Method and path | Purpose |
 |---|---|

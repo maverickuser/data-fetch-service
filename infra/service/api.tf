@@ -19,6 +19,8 @@ locals {
 resource "aws_apigatewayv2_api" "http" {
   name          = "data-fetch-service"
   protocol_type = "HTTP"
+  # Only https://fetch.kagent.app serves the API; the default execute-api URL is turned off.
+  disable_execute_api_endpoint = true
 }
 
 resource "aws_apigatewayv2_integration" "api" {
@@ -33,7 +35,9 @@ resource "aws_apigatewayv2_route" "api" {
   for_each  = local.api_routes
   api_id    = aws_apigatewayv2_api.http.id
   route_key = each.value
-  target    = "integrations/${aws_apigatewayv2_integration.api.id}"
+  # Routes that start work require SigV4-signed requests; reads and /docs stay public.
+  authorization_type = startswith(each.value, "POST ") ? "AWS_IAM" : "NONE"
+  target             = "integrations/${aws_apigatewayv2_integration.api.id}"
 }
 
 resource "aws_cloudwatch_log_group" "api_access" {

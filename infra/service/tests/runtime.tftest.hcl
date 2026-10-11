@@ -173,6 +173,18 @@ run "production_shape" {
     error_message = "Producer and API outputs must keep their agreed names and values."
   }
   assert {
+    condition     = alltrue([for key, route in aws_apigatewayv2_route.api : route.authorization_type == (startswith(key, "POST ") ? "AWS_IAM" : "NONE")]) && length([for key, route in aws_apigatewayv2_route.api : key if route.authorization_type == "AWS_IAM"]) == 3
+    error_message = "Exactly the three POST routes must require IAM authorization; reads and docs stay public."
+  }
+  assert {
+    condition     = output.api_post_invoke_arn == "arn:aws:execute-api:ap-south-1:123456789012:mock/*/POST/v1/*"
+    error_message = "The invoke ARN output must cover only the POST routes."
+  }
+  assert {
+    condition     = aws_apigatewayv2_api.http.disable_execute_api_endpoint == true
+    error_message = "The API must be reachable only through its fetch.kagent.app custom domain."
+  }
+  assert {
     condition     = aws_lambda_function.handler["pull"].memory_size == 2048 && aws_lambda_function.handler["pull"].timeout == 900 && aws_lambda_function.handler["pull"].ephemeral_storage[0].size == 4096 && length(aws_lambda_function.handler) == 5
     error_message = "Pull needs its configured memory, disk and timeout; five Lambdas must exist."
   }

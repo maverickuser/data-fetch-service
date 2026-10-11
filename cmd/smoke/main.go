@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/maverickuser/data-fetch-service/internal/delivery"
 	"github.com/maverickuser/data-fetch-service/internal/smoke"
 )
 
@@ -50,7 +52,11 @@ func execute(ctx context.Context, d dependencies) error {
 	if err != nil {
 		return err
 	}
-	runner := &smoke.Runner{Config: environment.Config, HTTP: &http.Client{Timeout: 30 * time.Second},
+	if awsCfg.Region == "" {
+		return fmt.Errorf("smoke preflight: an AWS region is required to sign API requests")
+	}
+	signer := &delivery.SigV4Signer{Credentials: awsCfg.Credentials, Region: awsCfg.Region, Now: d.Now}
+	runner := &smoke.Runner{Config: environment.Config, HTTP: smoke.SigningClient{Client: &http.Client{Timeout: 30 * time.Second}, Signer: signer},
 		Queue:     smoke.SQSQueue{Client: sqs.NewFromConfig(awsCfg), URL: environment.QueueURL},
 		Objects:   smoke.S3Objects{Client: s3.NewFromConfig(awsCfg), Bucket: environment.ArtifactBucket},
 		Schedules: smoke.SchedulerSchedules{Client: scheduler.NewFromConfig(awsCfg)},

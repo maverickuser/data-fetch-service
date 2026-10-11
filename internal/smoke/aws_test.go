@@ -3,6 +3,8 @@ package smoke
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -94,5 +96,68 @@ func TestLoadEnvironmentRequiresExplicitInputs(t *testing.T) {
 			t.Fatal(name, err)
 		}
 		values[name] = original
+	}
+}
+
+type recordingSigner struct {
+	err  error
+	body []byte
+	seen bool
+}
+
+func (s *recordingSigner) Sign(_ context.Context, r *http.Request, body []byte) error {
+	s.seen, s.body = true, body
+	r.Header.Set("Authorization", "signed")
+	return s.err
+}
+
+type capturingClient struct {
+	auth, body string
+}
+
+func (c *capturingClient) Do(r *http.Request) (*http.Response, error) {
+	c.auth = r.Header.Get("Authorization")
+	if r.Body != nil {
+		data, _ := io.ReadAll(r.Body)
+		c.body = string(data)
+	}
+	return &http.Response{StatusCode: 202, Body: io.NopCloser(strings.NewReader("{}"))}, nil
+}
+
+func TestSigningClientSignsExactBodyAndForwardsIt(t *testing.T) {
+	signer, inner := &recordingSigner{}, &capturingClient{}
+	client := SigningClient{Client: inner, Signer: signer}
+	request, _ := http.NewRequest(http.MethodPost, "https://fetch.kagent.app/v1/runs/r/reruns", strings.NewReader(`{"force":true}`))
+	if _, err := client.Do(request); err != nil {
+		t.Fatal(err)
+	}
+	if string(signer.body) != `{"force":true}` || inner.body != `{"force":true}` || inner.auth != "signed" {
+		t.Fatalf("signed %q forwarded %q auth %q", signer.body, inner.body, inner.auth)
+	}
+
+	signer, inner = &recordingSigner{}, &capturingClient{}
+	request, _ = http.NewRequest(http.MethodGet, "https://fetch.kagent.app/v1/runs/r", nil)
+	if _, err := (SigningClient{Client: inner, Signer: signer}).Do(request); err != nil || !signer.seen || signer.body != nil || inner.auth != "signed" {
+		t.Fatalf("GET without body must be signed with an empty payload: %v %v %q", err, signer.body, inner.auth)
+	}
+}
+
+func TestSigningClientRejectsUnsignableRequests(t *testing.T) {
+	inner := &capturingClient{}
+	failing := SigningClient{Client: inner, Signer: &recordingSigner{err: errors.New("no credentials")}}
+	request, _ := http.NewRequest(http.MethodPost, "https://fetch.kagent.app/v1/runs/r/reruns", strings.NewReader("{}"))
+	if _, err := failing.Do(request); err == nil || !strings.Contains(err.Error(), "sign POST /v1/runs/r/reruns") || inner.auth != "" {
+		t.Fatal("signing failure must stop the request", err)
+	}
+
+	large := SigningClient{Client: inner, Signer: &recordingSigner{}}
+	request, _ = http.NewRequest(http.MethodPost, "https://fetch.kagent.app/v1/runs/r/reruns", strings.NewReader(strings.Repeat("x", maxBodyBytes+1)))
+	if _, err := large.Do(request); err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatal("oversized body must not be sent", err)
+	}
+
+	request, _ = http.NewRequest(http.MethodPost, "https://fetch.kagent.app/v1/runs/r/reruns", io.NopCloser(failingReader{}))
+	if _, err := large.Do(request); err == nil {
+		t.Fatal("body read failure must stop the request")
 	}
 }

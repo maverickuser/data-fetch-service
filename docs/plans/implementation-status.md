@@ -63,4 +63,6 @@ Independent review of PR 11/12 and the load workflow (2026-10-04) found no block
 
 API documentation (2026-10-11): the client contract is `internal/api/openapi.yaml` (OpenAPI 3.1), embedded in the API Lambda and served at `GET /docs/openapi.yaml` with Swagger UI at `GET /docs`; both routes are added to API Gateway. A unit test fails when its routes differ from the router or `infra/service/api.tf`, or its event types from configuration. `make check` passes 3556/3731 unit statements (95.31%). See [the API guide](../api.md).
 
+API access (2026-10-11): the API is reachable only at `https://fetch.kagent.app` (default `execute-api` endpoint disabled), and the three POST routes require IAM (SigV4) authorization; the smoke runner signs its requests. See [decision 0002](../decisions/0002-iam-auth-for-post-routes.md).
+
 Next: the AWS integration workflow needs a narrowly scoped `sqs:CreateQueue` grant to the deployment role before a live `plan` or `apply`; the deployed processor endpoint is also required. Live AWS/source tests remain deferred until release.
