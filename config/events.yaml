@@ -12,6 +12,9 @@ defaults:
   max_json_depth: 128
   max_zip_metadata_bytes: 8388608
   max_temp_bytes: 3221225472
+  # BSE answers 403 and NSDL resets the connection for Go's and curl's default
+  # User-Agents; only a browser User-Agent is accepted by both (decision 0003).
+  source_user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
 processor:
   enabled: false
   url: https://processor.example.invalid/v1/event-ingestions

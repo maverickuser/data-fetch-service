@@ -50,9 +50,9 @@ func TestStateRecorderPersistsAttempt(t *testing.T) {
 }
 
 func TestConfiguredLimits(t *testing.T) {
-	d := config.Defaults{MaxDownloadBytes: 100, MaxExtractedBytes: 200, MaxValidationTokenBytes: 10, MaxZipMetadataBytes: 80, MaxZipEntries: 3, MaxCompressionRatio: 4, MaxJSONDepth: 5, SourceMaxAttempts: 3, RequestTimeoutSeconds: 2}
+	d := config.Defaults{MaxDownloadBytes: 100, MaxExtractedBytes: 200, MaxValidationTokenBytes: 10, MaxZipMetadataBytes: 80, MaxZipEntries: 3, MaxCompressionRatio: 4, MaxJSONDepth: 5, SourceMaxAttempts: 3, RequestTimeoutSeconds: 2, SourceUserAgent: "agent/1"}
 	got := ConfiguredLimits(d)
-	if got.MaxDownloadBytes != 100 || got.MaxExtractedBytes != 200 || got.MaxTokenBytes != 10 || got.MaxZipMetadataBytes != 80 || got.MaxZipEntries != 3 || got.MaxCompressionRatio != 4 || got.MaxJSONDepth != 5 || got.MaxAttempts != 3 || got.RequestTimeout != 2*time.Second {
+	if got.MaxDownloadBytes != 100 || got.MaxExtractedBytes != 200 || got.MaxTokenBytes != 10 || got.MaxZipMetadataBytes != 80 || got.MaxZipEntries != 3 || got.MaxCompressionRatio != 4 || got.MaxJSONDepth != 5 || got.MaxAttempts != 3 || got.RequestTimeout != 2*time.Second || got.UserAgent != "agent/1" {
 		t.Fatal(got)
 	}
 }

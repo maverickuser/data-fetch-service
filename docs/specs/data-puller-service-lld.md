@@ -224,6 +224,7 @@ defaults:
   max_zip_entries: 10000
   max_compression_ratio: 100
   max_validation_token_bytes: 1048576  # bound individual field/string buffering
+  source_user_agent: 'Mozilla/5.0 (Windows NT 10.0; ...) Chrome/130.0.0.0 Safari/537.36'  # see decision 0003
 processor:
   enabled: false
   url: "https://processor.example.invalid/v1/event-ingestions"
@@ -588,6 +589,7 @@ Preserve per-job success/failure even when the group fails. Never deliver a part
 - Reuse an HTTP client with connection pooling; bound request duration, redirects, and downloaded bytes.
 - Resolve and validate public destination addresses on each connection and redirect; reject loopback, private, link-local, and metadata endpoints. Runtime inputs cannot inject arbitrary destination URLs.
 - Request identity content encoding and reject unsupported content encodings in v1, avoiding accidental decompression changes to preserved response bytes.
+- Send the configured `defaults.source_user_agent` on every source request. BSE and NSDL reject Go's and curl's default User-Agents, so the value is a browser User-Agent ([decision](../decisions/0003-browser-user-agent-for-sources.md)). It is pinned in each run's snapshot with the other defaults.
 - Accept a complete successful response, reject partial-content responses, and verify declared and actual formats. HTML/error bodies are rejected even on HTTP 200.
 - Store bytes unchanged; SHA-256 is computed over the raw CSV/JSON file, not parsed or normalized data.
 - JSON validation must validate the full stream with bounded token/depth limits, not `ReadAll` or decoding an entire root object. A bounded streaming validator is required; built-in decoder usage must be measured for large individual strings.

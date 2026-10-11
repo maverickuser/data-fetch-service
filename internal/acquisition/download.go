@@ -57,6 +57,9 @@ func DownloadSource(ctx context.Context, client HTTPClient, budget *Budget, limi
 		return nil, 0, err
 	}
 	request.Header.Set("Accept-Encoding", "identity")
+	if limits.UserAgent != "" {
+		request.Header.Set("User-Agent", limits.UserAgent)
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, 0, &Failure{Code: "SOURCE_TRANSPORT", Retryable: !errors.Is(err, ErrUnsafeDestination) && parent.Err() == nil, Cause: err}

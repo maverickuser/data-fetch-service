@@ -65,4 +65,6 @@ API documentation (2026-10-11): the client contract is `internal/api/openapi.yam
 
 API access (2026-10-11): the API is reachable only at `https://fetch.kagent.app` (default `execute-api` endpoint disabled), and the three POST routes require IAM (SigV4) authorization; the smoke runner signs its requests. See [decision 0002](../decisions/0002-iam-auth-for-post-routes.md).
 
-Next: the AWS integration workflow needs a narrowly scoped `sqs:CreateQueue` grant to the deployment role before a live `plan` or `apply`; the deployed processor endpoint is also required. Live AWS/source tests remain deferred until release.
+Source User-Agent (2026-10-11): the AWS integration workflow passed in run 38129796419. The first release `plan` (run 38139010371) failed its source preflight because NSDL resets connections for curl's default User-Agent; probes showed BSE (403) and NSDL (reset) also reject Go's default, which the Pull Lambda sent. Source requests now send the configured `defaults.source_user_agent`, a browser User-Agent, and the preflight uses it ([decision 0003](../decisions/0003-browser-user-agent-for-sources.md)).
+
+Next: rerun release `plan` with the source User-Agent fix, then `apply` (which now runs without an approval gate) and the release smoke suite. Nothing is deployed yet.

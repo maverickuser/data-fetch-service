@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -46,6 +47,9 @@ func TestInvalidConfiguration(t *testing.T) {
 		"empty":             func(c *Config) { c.Events = nil },
 		"retry":             func(c *Config) { c.Defaults.SourceMaxAttempts = 0 },
 		"resource":          func(c *Config) { c.Defaults.MaxDownloadBytes = 0 },
+		"user agent":        func(c *Config) { c.Defaults.SourceUserAgent = "" },
+		"agent control":     func(c *Config) { c.Defaults.SourceUserAgent = "agent\r\nX-Injected: 1" },
+		"agent length":      func(c *Config) { c.Defaults.SourceUserAgent = strings.Repeat("a", 257) },
 		"processor timeout": func(c *Config) { c.Processor.RequestTimeoutSeconds = 0 },
 		"processor URL":     func(c *Config) { c.Processor.URL = "http://example.org" },
 		"duplicate event":   func(c *Config) { c.Events = append(c.Events, c.Events[0]) },
