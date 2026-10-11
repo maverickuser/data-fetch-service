@@ -75,7 +75,7 @@ variables {
 
 override_data {
   target = data.aws_route53_zone.shared
-  values = { name = "kagent.app.", private_zone = false }
+  values = { name = "kagent.app", private_zone = false }
 }
 
 override_resource {
