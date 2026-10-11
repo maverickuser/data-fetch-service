@@ -5,6 +5,7 @@
 - [Implementation plan](plans/data-fetch-service-implementation-plan.md) and [status](plans/implementation-status.md): sequence and evidence.
 - [Implementation context](plans/data-fetch-service-implementation-context-spec.md): supplied and pending inputs.
 - [Go standards](engineering/go-standards.md) and [review policy](engineering/pr-review.md): engineering gates.
+- [API guide](api.md) and [OpenAPI document](../internal/api/openapi.yaml): public REST API for clients, served with Swagger UI at `/docs`.
 - [Admission runtime and API](runtime.md): implemented entry points, deployment inputs and API limits.
 - [Pull PR description](plans/pull-pr.md): complete-event orchestration, manifest and fingerprint behavior.
 - [Delivery PR description](plans/delivery-pr.md): processor admission, durable attempts, and accepted-baseline recovery.

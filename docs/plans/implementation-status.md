@@ -61,4 +61,6 @@ The isolated manual `Load and resource` workflow runs 64-MiB streamed CSV, 32-Mi
 
 Independent review of PR 11/12 and the load workflow (2026-10-04) found no blocker in the local load fixtures or smoke harness. It identified two release gaps: missing mandatory AWS integration and processor/hosted-zone preflight after AWS mutation. Pull request #9 addresses both in workflow code, and independent exact-head re-review found no blocker. Live release verification remains outstanding.
 
+API documentation (2026-10-11): the client contract is `internal/api/openapi.yaml` (OpenAPI 3.1), embedded in the API Lambda and served at `GET /docs/openapi.yaml` with Swagger UI at `GET /docs`; both routes are added to API Gateway. A unit test fails when its routes differ from the router or `infra/service/api.tf`, or its event types from configuration. `make check` passes 3556/3731 unit statements (95.31%). See [the API guide](../api.md).
+
 Next: the AWS integration workflow needs a narrowly scoped `sqs:CreateQueue` grant to the deployment role before a live `plan` or `apply`; the deployed processor endpoint is also required. Live AWS/source tests remain deferred until release.

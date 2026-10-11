@@ -12,4 +12,8 @@ export PATH="$HOME/.local/share/data-fetch-toolchain/go/bin:$HOME/.local/share/d
 make check
 ```
 
+## API documentation
+
+The public REST API is described in OpenAPI 3.1 at [`internal/api/openapi.yaml`](internal/api/openapi.yaml). Once deployed, it is served with Swagger UI at `https://fetch.kagent.app/docs`, and the raw document at `https://fetch.kagent.app/docs/openapi.yaml`. See the [API guide](docs/api.md) for viewing options, examples, and client behaviour.
+
 Read [agent guidance](AGENTS.md), [documentation](docs/README.md), and [implementation status](docs/plans/implementation-status.md).

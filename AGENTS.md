@@ -22,7 +22,7 @@ Keep current instructions and user-approved changes reflected in the LLD. Do not
 - `internal/domain`, `internal/config`: identities, states, contracts, YAML validation, and template resolution.
 - `internal/admission`, `internal/orchestration`, `internal/acquisition`: admission, group execution, source downloads/validation/extraction.
 - `internal/state`, `internal/storage`, `internal/delivery`: S3 coordination/artifacts and downstream handoff.
-- `internal/api`, `internal/telemetry`: REST adapters, logs, and metrics.
+- `internal/api`, `internal/telemetry`: REST adapters, logs, and metrics. `internal/api/openapi.yaml` is the client contract, served at `/docs`; update it with any route or payload change (its drift test runs in `make test-unit`).
 - `config/events.yaml`, `config/environments/prod.yaml`: version-controlled effective configuration.
 - `infra/bootstrap`, `infra/service`: separate Terraform backend bootstrap and production runtime resources.
 - `internal/awsverify`: `aws`-tagged tests run only by the AWS integration workflow against disposable resources.

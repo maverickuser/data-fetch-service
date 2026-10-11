@@ -10,7 +10,9 @@ locals {
     "GET /v1/runs/{run_id}/history",
     "GET /v1/runs/{run_id}/pulls",
     "GET /v1/runs/{run_id}/delivery",
-    "GET /v1/requests/{producer}/{event_id}"
+    "GET /v1/requests/{producer}/{event_id}",
+    "GET /docs",
+    "GET /docs/openapi.yaml"
   ])
 }
 
