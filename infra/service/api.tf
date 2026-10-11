@@ -87,7 +87,7 @@ resource "terraform_data" "domain_contract" {
   input = var.hosted_zone_id
   lifecycle {
     precondition {
-      condition     = data.aws_route53_zone.shared.name == "kagent.app."
+      condition     = trimsuffix(data.aws_route53_zone.shared.name, ".") == "kagent.app"
       error_message = "hosted_zone_id must identify the existing public kagent.app zone."
     }
   }
