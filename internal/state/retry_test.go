@@ -129,7 +129,7 @@ func TestRetryProjectionShowsReservedChildBeforeChildHistory(t *testing.T) {
 	if _, err := c.ReservePullRetry(context.Background(), coordKey, "child"); err == nil {
 		t.Fatal("expected interruption")
 	}
-	c.store = New(m)
+	c.store = New(s3NotFoundObjects{m})
 	current, _, err := c.Load(context.Background(), coordKey)
 	if err != nil || current.Retry == nil {
 		t.Fatal(current, err)

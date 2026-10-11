@@ -71,4 +71,6 @@ Hosted zone (2026-10-11): the `domain_contract` precondition now accepts the pro
 
 Release smoke removed (2026-10-11): the release `apply` stage no longer runs the smoke suite. It required an enabled BSE schedule and ingress consumption, both off in the first rollout, and is being redesigned. The runner and manual `Smoke` workflow remain.
 
-Next: run release `apply`; nothing is deployed yet.
+First deployment (2026-10-11): release `apply` run 38143139580 deployed commit `c3f3678` to production (`https://fetch.kagent.app`). A manual BSE run for 2026-10-01 (`run_8e2241758bb80647798bd5e763f722d7`) fetched the file, delivered it, and recorded processor HTTP 202 within 13 seconds, but every run read, the run list, and the POST response itself returned `404 NOT_FOUND`. `ReadRun` compared the missing automatic-retry link with `== ErrNotFound`, while the S3 adapter joins that sentinel with the SDK error; unit and integration fakes returned the bare sentinel. Fixed with `errors.Is` and S3-shaped not-found fakes in the projection tests.
+
+Next: release `apply` with the `ReadRun` fix, then confirm the existing run reads back; API error logs record only the error code, not its cause.

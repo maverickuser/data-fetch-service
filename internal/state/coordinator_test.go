@@ -167,6 +167,19 @@ func (f *interruptObjects) Put(ctx context.Context, key string, data []byte, mat
 	return etag, err
 }
 
+// s3NotFoundObjects reports missing keys as the S3 adapter does: the sentinel joined with the SDK error.
+type s3NotFoundObjects struct {
+	Objects
+}
+
+func (f s3NotFoundObjects) Get(ctx context.Context, key string) (Object, error) {
+	object, err := f.Objects.Get(ctx, key)
+	if errors.Is(err, ErrNotFound) {
+		return Object{}, errors.Join(ErrNotFound, errors.New("api error NoSuchKey: The specified key does not exist."))
+	}
+	return object, err
+}
+
 func TestRepairAcrossEveryTransitionWriteBoundary(t *testing.T) {
 	for _, after := range []bool{false, true} {
 		for boundary := 1; boundary <= 3; boundary++ {
