@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,6 +51,38 @@ func TestExecuteWiresRealClientsAndWritesReport(t *testing.T) {
 	}
 }
 
+func TestExecuteSignsAPIRequestsWithSigV4(t *testing.T) {
+	d, _, runner := fixture(complete(), nil)
+	d.LoadAWS = func(context.Context, ...func(*awsconfig.LoadOptions) error) (aws.Config, error) {
+		return aws.Config{Region: "ap-south-1", Credentials: aws.NewCredentialsCache(aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+			return aws.Credentials{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "secret"}, nil
+		}))}, nil
+	}
+	if err := execute(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	client, ok := (*runner).HTTP.(smoke.SigningClient)
+	if !ok {
+		t.Fatalf("runner HTTP client %T must sign requests", (*runner).HTTP)
+	}
+	var authorization string
+	client.Client = roundTrip(func(r *http.Request) (*http.Response, error) {
+		authorization = r.Header.Get("Authorization")
+		return httptest.NewRecorder().Result(), nil
+	})
+	request, _ := http.NewRequest(http.MethodPost, "https://fetch.kagent.app/v1/events/nsdl-bond-data/runs", strings.NewReader(`{"inputs":{}}`))
+	if _, err := client.Do(request); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(authorization, "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/") || !strings.Contains(authorization, "/ap-south-1/execute-api/aws4_request") {
+		t.Fatalf("authorization = %q", authorization)
+	}
+}
+
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) Do(r *http.Request) (*http.Response, error) { return f(r) }
+
 func TestExecuteReportsFailures(t *testing.T) {
 	failed := errors.New("smoke BSE: failed")
 	d, written, _ := fixture(complete(), failed)
@@ -66,6 +101,13 @@ func TestExecuteReportsFailures(t *testing.T) {
 	}
 	if err := execute(context.Background(), d); err == nil || *runner != nil {
 		t.Fatal("credential failure ignored", err)
+	}
+	d, _, runner = fixture(complete(), nil)
+	d.LoadAWS = func(context.Context, ...func(*awsconfig.LoadOptions) error) (aws.Config, error) {
+		return aws.Config{}, nil
+	}
+	if err := execute(context.Background(), d); err == nil || !strings.Contains(err.Error(), "region") || *runner != nil {
+		t.Fatal("missing region must fail before any call", err)
 	}
 	d, _, _ = fixture(complete(), nil)
 	d.WriteFile = func(string, []byte, os.FileMode) error { return errors.New("disk full") }

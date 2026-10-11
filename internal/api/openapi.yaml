@@ -7,10 +7,13 @@ info:
     Public REST API of `data-fetch-service`. It admits manual runs of configured
     events, starts recovery runs, and exposes read-only run status.
 
-    - **Authentication:** none. Anyone who can reach the endpoint can trigger
-      configured work and read run history. Request bodies only select
-      configured events; they cannot supply source URLs, S3 keys, or processor
-      destinations.
+    - **Authentication:** the three POST routes, which start work, require
+      AWS Signature Version 4 (`sigv4` scheme): sign with credentials of an
+      IAM role allowed `execute-api:Invoke` on them, for service
+      `execute-api` in `ap-south-1`. Unsigned or unauthorized calls get
+      `403`. Read routes and `/docs` need no authentication. Request bodies
+      only select configured events; they cannot supply source URLs, S3 keys,
+      or processor destinations.
     - **Throttling:** API Gateway allows 10 requests per second with bursts
       of 20. Excess requests get `429`.
     - **Asynchronous work:** POST routes return as soon as the run is durably
@@ -51,6 +54,8 @@ paths:
     post:
       tags: [Runs]
       operationId: createManualRun
+      security:
+        - sigv4: []
       summary: Start a manual run
       description: |
         Admits one run of a configured event with the given inputs. If an
@@ -84,6 +89,8 @@ paths:
           $ref: '#/components/responses/Replayed'
         '400':
           $ref: '#/components/responses/InvalidRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
         '413':
@@ -144,6 +151,8 @@ paths:
     post:
       tags: [Runs]
       operationId: createFullRerun
+      security:
+        - sigv4: []
       summary: Rerun a finished run from its original snapshot
       description: |
         Creates a linked child run that repeats every job with the parent's
@@ -164,6 +173,8 @@ paths:
           $ref: '#/components/responses/Replayed'
         '400':
           $ref: '#/components/responses/InvalidRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -182,6 +193,8 @@ paths:
     post:
       tags: [Runs]
       operationId: createDeliveryRetry
+      security:
+        - sigv4: []
       summary: Retry a failed delivery without downloading again
       description: |
         Creates a linked child run that resubmits the parent's stored files to
@@ -203,6 +216,8 @@ paths:
           $ref: '#/components/responses/Replayed'
         '400':
           $ref: '#/components/responses/InvalidRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -465,6 +480,17 @@ paths:
         '429':
           $ref: '#/components/responses/Throttled'
 components:
+  securitySchemes:
+    sigv4:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: |
+        AWS Signature Version 4 for service `execute-api`, region `ap-south-1`.
+        Sign the whole request, including the body hash, with credentials of a
+        role allowed `execute-api:Invoke` on the Terraform output
+        `api_post_invoke_arn`. Use an AWS SDK, `awscurl`, or Postman's AWS
+        Signature auth; Swagger UI cannot compute this signature.
   parameters:
     EventType:
       name: event_type
@@ -599,6 +625,19 @@ components:
             $ref: '#/components/schemas/Error'
           example:
             error: RESPONSE_TOO_LARGE_REDUCE_LIMIT
+    Forbidden:
+      description: |
+        Missing, invalid, or unauthorized SigV4 signature on a POST route. The
+        body is produced by API Gateway, not this service.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message:
+                type: string
+          example:
+            message: Forbidden
     Throttled:
       description: API Gateway throttling. The body is produced by API Gateway, not this service.
       content:

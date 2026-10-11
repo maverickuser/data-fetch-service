@@ -16,7 +16,7 @@ The document is compiled into the API Lambda, so the deployed `/docs/openapi.yam
 
 ## Viewing the document
 
-- **Deployed Swagger UI:** open `https://fetch.kagent.app/docs`. Use **Try it out** to call the live API from the browser. POST routes start real runs.
+- **Deployed Swagger UI:** open `https://fetch.kagent.app/docs`. **Try it out** works for the read routes. POST routes need a SigV4 signature, which Swagger UI cannot compute, so they return `403` there; use one of the signed options below.
 - **Swagger Editor:** open <https://editor.swagger.io>, then File → Import file → `internal/api/openapi.yaml`.
 - **Locally with Docker:**
 
@@ -50,13 +50,42 @@ The Swagger UI page loads Swagger UI 5.17.14 from `cdn.jsdelivr.net` with subres
 
 Event types are `daily-bhavcopy` (BSE debt bhavcopy; inputs `exchangeName`, optional `run_date`) and `nsdl-bond-data` (six NSDL files for one ISIN; input `isin_code`).
 
+## Authentication
+
+The three POST routes require AWS Signature Version 4 (service `execute-api`, region `ap-south-1`). The caller's IAM role or user needs:
+
+```json
+{"Effect": "Allow", "Action": "execute-api:Invoke", "Resource": "<api_post_invoke_arn>"}
+```
+
+`api_post_invoke_arn` is a Terraform output of the service stack and covers only `POST /v1/*`. Ways to send a signed request:
+
+- **curl 7.75 or later** with temporary credentials exported in the shell:
+
+  ```sh
+  curl --aws-sigv4 'aws:amz:ap-south-1:execute-api' \
+    --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
+    -H "x-amz-security-token: $AWS_SESSION_TOKEN" ...
+  ```
+
+- **awscurl** (`pip install awscurl`): `awscurl --service execute-api --region ap-south-1 -X POST ...`, which reads the usual AWS credential chain.
+- **Postman:** Authorization → AWS Signature, service `execute-api`, region `ap-south-1`.
+- **AWS SDKs:** sign with the SDK's SigV4 signer. This service's smoke runner does so in `internal/smoke` with `delivery.SigV4Signer`.
+
+Unsigned, wrongly signed, or unauthorized POSTs get `403` with API Gateway's `{"message": "Forbidden"}`. Read routes and `/docs` need no signature.
+
 ## Common tasks
+
+The POST examples below assume this shell alias:
+
+```sh
+alias fetchpost='curl -sS -X POST --aws-sigv4 aws:amz:ap-south-1:execute-api --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" -H "x-amz-security-token: $AWS_SESSION_TOKEN" -H "Content-Type: application/json"'
+```
 
 Start a BSE run for one trade date, with a key so a retry after a timeout is safe:
 
 ```sh
-curl -sS -X POST https://fetch.kagent.app/v1/events/daily-bhavcopy/runs \
-  -H 'Content-Type: application/json' \
+fetchpost https://fetch.kagent.app/v1/events/daily-bhavcopy/runs \
   -H 'Idempotency-Key: bse-2026-10-09' \
   -d '{"inputs": {"exchangeName": "BSE", "run_date": "2026-10-09"}}'
 ```
@@ -72,8 +101,7 @@ If an automatic retry happened, `latest_run_id` and `latest_phase` point to the 
 Fetch NSDL data for an ISIN even if it is unchanged since the last delivery:
 
 ```sh
-curl -sS -X POST https://fetch.kagent.app/v1/events/nsdl-bond-data/runs \
-  -H 'Content-Type: application/json' \
+fetchpost https://fetch.kagent.app/v1/events/nsdl-bond-data/runs \
   -d '{"inputs": {"isin_code": "INE121A07QY9"}, "force": true}'
 ```
 
@@ -89,10 +117,10 @@ Recover a failed run: use `/delivery-retries` when downloads succeeded but deliv
 ## Behaviour clients should rely on
 
 - **One address.** The API answers only at `https://fetch.kagent.app`; API Gateway's default `execute-api` URL is turned off.
-- **No authentication.** Anyone who can reach the endpoint can start runs. Bodies only choose configured events and inputs.
+- **Authentication.** POST routes need a SigV4 signature from an IAM identity allowed `execute-api:Invoke` on `api_post_invoke_arn`; reads and `/docs` are public. Bodies only choose configured events and inputs.
 - **Throttling.** 10 requests per second, bursts of 20. Back off on `429`.
-- **Status codes.** `202` admitted or joined an active run (`reused: true`). `200` replays a finished request. `400` invalid request. `404` unknown resource. `409` conflicting key or a state that forbids the action. `410` expired (30-day retention). `413` body over 64 KiB. `503` retry later with the same `Idempotency-Key`.
-- **Errors** are `{"error": "<CODE>"}`, apart from API Gateway's `429` body. Codes are listed in the `Error` schema.
+- **Status codes.** `202` admitted or joined an active run (`reused: true`). `200` replays a finished request. `400` invalid request. `403` missing or unauthorized signature (POST only). `404` unknown resource. `409` conflicting key or a state that forbids the action. `410` expired (30-day retention). `413` body over 64 KiB. `503` retry later with the same `Idempotency-Key`.
+- **Errors** are `{"error": "<CODE>"}`, apart from API Gateway's `403` and `429` bodies (`{"message": ...}`). Codes are listed in the `Error` schema.
 - **Unknown fields are rejected** with `400`, so send only documented fields.
 - **Pagination.** Pass `next_cursor` back unchanged; an empty string means the last page. `limit` is 1–100, default 25.
 - **Processor acceptance** is HTTP 202 from the processor only, recorded as an `acceptance` transition. This API has no callback for processing completion downstream.

@@ -38,4 +38,4 @@ The stack reads no processor Terraform state. The processor runs in the same AWS
 | `processor_reader_role_arns` | Processor roles allowed to read `runs/*` in the artifact bucket |
 | `enable_ingress_consumption`, `enable_bse_schedule` | Staged activation; both default to `false` |
 
-Outputs: `ingress_queue_url`, `ingress_queue_arn`, `api_url`, `artifact_bucket`, `state_bucket`, `lambda_function_names`, `deployment_commit`, `config_revision`.
+Outputs: `ingress_queue_url`, `ingress_queue_arn`, `api_url`, `api_post_invoke_arn` (grant `execute-api:Invoke` on it to roles that may start runs; the three POST routes use `AWS_IAM` authorization), `artifact_bucket`, `state_bucket`, `lambda_function_names`, `deployment_commit`, `config_revision`.

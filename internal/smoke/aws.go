@@ -1,9 +1,12 @@
 package smoke
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -70,6 +73,40 @@ func (s SchedulerSchedules) Get(ctx context.Context, name string) (Schedule, err
 		return Schedule{}, err
 	}
 	return Schedule{Expression: aws.ToString(output.ScheduleExpression), Timezone: aws.ToString(output.ScheduleExpressionTimezone), State: string(output.State)}, nil
+}
+
+// RequestSigner adds authorization headers computed over the exact request body.
+type RequestSigner interface {
+	Sign(context.Context, *http.Request, []byte) error
+}
+
+// SigningClient signs every API request so the IAM-protected POST routes accept it.
+type SigningClient struct {
+	Client HTTPClient
+	Signer RequestSigner
+}
+
+// Do buffers the bounded request body, signs the request, and sends it with the same body.
+func (c SigningClient) Do(request *http.Request) (*http.Response, error) {
+	var body []byte
+	if request.Body != nil && request.Body != http.NoBody {
+		data, err := io.ReadAll(io.LimitReader(request.Body, maxBodyBytes+1))
+		if closeErr := request.Body.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(data) > maxBodyBytes {
+			return nil, fmt.Errorf("%s %s: request body too large to sign", request.Method, request.URL.Path)
+		}
+		body = data
+		request.Body = io.NopCloser(bytes.NewReader(body))
+	}
+	if err := c.Signer.Sign(request.Context(), request, body); err != nil {
+		return nil, fmt.Errorf("sign %s %s: %w", request.Method, request.URL.Path, err)
+	}
+	return c.Client.Do(request)
 }
 
 // Environment is the explicit smoke configuration read from workflow variables.

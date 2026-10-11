@@ -173,3 +173,26 @@ func TestDocsRoutesServeDocumentAndViewer(t *testing.T) {
 		t.Fatalf("POST /docs = %d", rec.Code)
 	}
 }
+
+func TestOpenAPISecuresExactlyThePostRoutes(t *testing.T) {
+	_, raw := loadOpenAPI(t)
+	if scheme, ok := raw["components"].(map[string]any)["securitySchemes"].(map[string]any)["sigv4"].(map[string]any); !ok || scheme["in"] != "header" || scheme["name"] != "Authorization" {
+		t.Fatal("sigv4 security scheme missing")
+	}
+	for path, item := range raw["paths"].(map[string]any) {
+		for method, op := range item.(map[string]any) {
+			if method == "parameters" {
+				continue
+			}
+			security, _ := op.(map[string]any)["security"].([]any)
+			secured := len(security) == 1 && security[0].(map[string]any)["sigv4"] != nil
+			if secured != (method == "post") {
+				t.Errorf("%s %s: sigv4 required = %v, want %v", strings.ToUpper(method), path, secured, method == "post")
+			}
+			_, has403 := op.(map[string]any)["responses"].(map[string]any)["403"]
+			if has403 != (method == "post") {
+				t.Errorf("%s %s: documents 403 = %v", strings.ToUpper(method), path, has403)
+			}
+		}
+	}
+}
