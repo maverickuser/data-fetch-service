@@ -3,7 +3,7 @@
 Two Terraform root modules, both pinned to Terraform `~> 1.16.4` and AWS provider `6.61.0`. Nothing here has been applied; see [implementation status](../docs/plans/implementation-status.md).
 
 - `bootstrap/`: the bucket `data-fetch-service-packages` that holds immutable Lambda release packages. The Terraform state bucket `data-fetch-service-terraform-state` is created by the release workflow before any Terraform runs, and state is locked with an S3 lock file, so there is no lock table.
-- `service/`: production runtime — buckets, three queues with DLQs, five Lambdas outside any VPC, the HTTP API at `fetch.kagent.app`, schedules, IAM, and alarms. It uses no VPC.
+- `service/`: production runtime — buckets, three queues with DLQs, five Lambdas outside any VPC, the HTTP API at `fetch.kagent.app` (its default `execute-api` URL is disabled), schedules, IAM, and alarms. It uses no VPC.
 
 ## Local checks
 

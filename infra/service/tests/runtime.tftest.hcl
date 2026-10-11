@@ -173,6 +173,10 @@ run "production_shape" {
     error_message = "Producer and API outputs must keep their agreed names and values."
   }
   assert {
+    condition     = aws_apigatewayv2_api.http.disable_execute_api_endpoint == true
+    error_message = "The API must be reachable only through its fetch.kagent.app custom domain."
+  }
+  assert {
     condition     = aws_lambda_function.handler["pull"].memory_size == 2048 && aws_lambda_function.handler["pull"].timeout == 900 && aws_lambda_function.handler["pull"].ephemeral_storage[0].size == 4096 && length(aws_lambda_function.handler) == 5
     error_message = "Pull needs its configured memory, disk and timeout; five Lambdas must exist."
   }

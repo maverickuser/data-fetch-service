@@ -19,6 +19,8 @@ locals {
 resource "aws_apigatewayv2_api" "http" {
   name          = "data-fetch-service"
   protocol_type = "HTTP"
+  # Only https://fetch.kagent.app serves the API; the default execute-api URL is turned off.
+  disable_execute_api_endpoint = true
 }
 
 resource "aws_apigatewayv2_integration" "api" {

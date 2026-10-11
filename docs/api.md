@@ -88,6 +88,7 @@ Recover a failed run: use `/delivery-retries` when downloads succeeded but deliv
 
 ## Behaviour clients should rely on
 
+- **One address.** The API answers only at `https://fetch.kagent.app`; API Gateway's default `execute-api` URL is turned off.
 - **No authentication.** Anyone who can reach the endpoint can start runs. Bodies only choose configured events and inputs.
 - **Throttling.** 10 requests per second, bursts of 20. Back off on `429`.
 - **Status codes.** `202` admitted or joined an active run (`reused: true`). `200` replays a finished request. `400` invalid request. `404` unknown resource. `409` conflicting key or a state that forbids the action. `410` expired (30-day retention). `413` body over 64 KiB. `503` retry later with the same `Idempotency-Key`.
