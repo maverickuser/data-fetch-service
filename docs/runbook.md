@@ -21,7 +21,7 @@ Before any stage mutates AWS, a read-only preflight checks the deployment role a
 Required repository configuration:
 
 - Secret `AWS_ROLE_TO_ASSUME`. The smoke suite signs its POST requests with this role, so it needs `execute-api:Invoke` on the service's `api_post_invoke_arn` output.
-- Variable `HOSTED_ZONE_ID` (needed from `plan` onward); `SMOKE_NSDL_ISIN` and `PROCESSOR_READER_ROLE_ARNS` (a JSON list of the processor's role ARNs, needed for `apply`).
+- Secret `HOSTED_ZONE_ID` (needed from `plan` onward); secrets `SMOKE_NSDL_ISIN` and `PROCESSOR_READER_ROLE_ARNS` (a JSON list of the processor's role ARNs, from its `source_reader_role_arns` output, needed for `apply`). GitHub masks secret values, so logs and the Terraform plan show them as `***`.
 - Environments `prod` and `prod-apply`, with required reviewers on `prod-apply`.
 - Optional variables: `AWS_REGION` (default `ap-south-1`), `ENABLE_INGRESS_CONSUMPTION` and `ENABLE_BSE_SCHEDULE` (default `false`), `EXTERNAL_PRODUCER_ROLE_ARNS` (JSON list, default `[]`), `SMOKE_BSE_FALLBACK_WEEKDAYS`.
 
