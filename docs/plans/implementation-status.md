@@ -67,4 +67,8 @@ API access (2026-10-11): the API is reachable only at `https://fetch.kagent.app`
 
 Source User-Agent (2026-10-11): the AWS integration workflow passed in run 38129796419. The first release `plan` (run 38139010371) failed its source preflight because NSDL resets connections for curl's default User-Agent; probes showed BSE (403) and NSDL (reset) also reject Go's default, which the Pull Lambda sent. Source requests now send the configured `defaults.source_user_agent`, a browser User-Agent, and the preflight uses it ([decision 0003](../decisions/0003-browser-user-agent-for-sources.md)).
 
-Next: rerun release `plan` with the source User-Agent fix, then `apply` (which now runs without an approval gate) and the release smoke suite. Nothing is deployed yet.
+Hosted zone (2026-10-11): the `domain_contract` precondition now accepts the provider's `kagent.app` without a trailing dot. Release `plan` run 38141541896 passed every stage and planned 93 additions, no changes or deletions.
+
+Release smoke removed (2026-10-11): the release `apply` stage no longer runs the smoke suite. It required an enabled BSE schedule and ingress consumption, both off in the first rollout, and is being redesigned. The runner and manual `Smoke` workflow remain.
+
+Next: run release `apply`; nothing is deployed yet.
