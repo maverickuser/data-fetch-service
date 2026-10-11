@@ -32,20 +32,20 @@ type Config struct {
 
 // Defaults contains shared acquisition and retry limits.
 type Defaults struct {
-	PullConcurrency         int    `yaml:"pull_concurrency" json:"pull_concurrency"`
-	RequestTimeoutSeconds   int    `yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
-	SourceMaxAttempts       int    `yaml:"source_max_attempts" json:"source_max_attempts"`
-	PullExecutionMaxRetries int    `yaml:"pull_execution_max_retries" json:"pull_execution_max_retries"`
-	MaxDownloadBytes        int64  `yaml:"max_download_bytes" json:"max_download_bytes"`
-	MaxExtractedBytes       int64  `yaml:"max_extracted_bytes" json:"max_extracted_bytes"`
-	MaxZipEntries           int    `yaml:"max_zip_entries" json:"max_zip_entries"`
-	MaxCompressionRatio     int    `yaml:"max_compression_ratio" json:"max_compression_ratio"`
-	MaxValidationTokenBytes int64  `yaml:"max_validation_token_bytes" json:"max_validation_token_bytes"`
-	MaxJSONDepth            int    `yaml:"max_json_depth" json:"max_json_depth"`
-	MaxZipMetadataBytes     int64  `yaml:"max_zip_metadata_bytes" json:"max_zip_metadata_bytes"`
-	MaxTempBytes            int64  `yaml:"max_temp_bytes" json:"max_temp_bytes"`
+	PullConcurrency         int   `yaml:"pull_concurrency" json:"pull_concurrency"`
+	RequestTimeoutSeconds   int   `yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
+	SourceMaxAttempts       int   `yaml:"source_max_attempts" json:"source_max_attempts"`
+	PullExecutionMaxRetries int   `yaml:"pull_execution_max_retries" json:"pull_execution_max_retries"`
+	MaxDownloadBytes        int64 `yaml:"max_download_bytes" json:"max_download_bytes"`
+	MaxExtractedBytes       int64 `yaml:"max_extracted_bytes" json:"max_extracted_bytes"`
+	MaxZipEntries           int   `yaml:"max_zip_entries" json:"max_zip_entries"`
+	MaxCompressionRatio     int   `yaml:"max_compression_ratio" json:"max_compression_ratio"`
+	MaxValidationTokenBytes int64 `yaml:"max_validation_token_bytes" json:"max_validation_token_bytes"`
+	MaxJSONDepth            int   `yaml:"max_json_depth" json:"max_json_depth"`
+	MaxZipMetadataBytes     int64 `yaml:"max_zip_metadata_bytes" json:"max_zip_metadata_bytes"`
+	MaxTempBytes            int64 `yaml:"max_temp_bytes" json:"max_temp_bytes"`
 	// SourceUserAgent is sent on every source request; BSE and NSDL reject Go's default.
-	SourceUserAgent         string `yaml:"source_user_agent" json:"source_user_agent"`
+	SourceUserAgent string `yaml:"source_user_agent" json:"source_user_agent"`
 }
 
 // Processor configures the IAM-protected API Gateway admission endpoint.
