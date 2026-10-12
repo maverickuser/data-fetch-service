@@ -92,7 +92,7 @@ func TestResponseMediaAndBackoff(t *testing.T) {
 		format, media string
 		valid         bool
 	}{{"zip", "application/zip", true}, {"zip", "application/x-zip-compressed", true}, {"json", "application/problem+json", true}, {"json", "", false}, {"xml", "application/octet-stream", false}, {"csv", "application/octet-stream", true}} {
-		err := checkResponse(&http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {test.media}}}, test.format, now)
+		err := checkRepresentation(&http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {test.media}}}, test.format)
 		if (err == nil) != test.valid {
 			t.Fatal(test, err)
 		}
