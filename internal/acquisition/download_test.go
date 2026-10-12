@@ -100,7 +100,7 @@ func TestDownloadFailureCleanup(t *testing.T) {
 
 func TestSourceStatusRetryClassification(t *testing.T) {
 	for _, status := range []int{206, 400, 404, 408, 429, 500, 503} {
-		err := checkResponse(&http.Response{StatusCode: status, Header: http.Header{"Retry-After": {"999"}}}, "json", time.Now())
+		err := checkStatus(&http.Response{StatusCode: status, Header: http.Header{"Retry-After": {"999"}}}, time.Now())
 		var failure *Failure
 		wantCode := "SOURCE_HTTP"
 		if status == 404 {
@@ -109,6 +109,58 @@ func TestSourceStatusRetryClassification(t *testing.T) {
 		if !errors.As(err, &failure) || failure.Code != wantCode || failure.Retryable != (status == 408 || status == 429 || status >= 500) || failure.RetryAfter != 999*time.Second {
 			t.Fatal(status, err)
 		}
+	}
+}
+
+func TestDownloadStoresNoRecordAnswer(t *testing.T) {
+	const answer = `{"status":400,"message":"No Record Found","description":"","params":[]}`
+	for _, length := range []int64{-1, int64(len(answer))} {
+		body := &trackedBody{Reader: strings.NewReader(answer)}
+		client := clientFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 400, ContentLength: length, Header: http.Header{"Content-Type": {"application/json"}}, Body: body}, nil
+		})
+		budget := NewBudget(1 << 10)
+		d, status, err := DownloadSource(context.Background(), client, budget, Limits{MaxDownloadBytes: 1 << 10, RequestTimeout: time.Second}, "https://example.com/listings", "json", t.TempDir(), time.Now())
+		if err != nil || status != 400 {
+			t.Fatal(length, status, err)
+		}
+		stored, err := io.ReadAll(d.File)
+		if err != nil || string(stored) != answer || d.Bytes != int64(len(answer)) || !body.closed {
+			t.Fatal(length, string(stored), err)
+		}
+		if err := d.Close(); err != nil || budget.used != 0 {
+			t.Fatal(err, budget.used)
+		}
+	}
+}
+
+func TestDownloadRejectsOtherBadRequests(t *testing.T) {
+	for _, test := range []struct {
+		name, format, media string
+		body                io.Reader
+	}{
+		{name: "other message", format: "json", media: "application/json", body: strings.NewReader(`{"message":"Invalid ISIN"}`)},
+		{name: "not json", format: "json", media: "application/json", body: strings.NewReader(`No Record Found`)},
+		{name: "csv job", format: "csv", media: "text/csv", body: strings.NewReader(`{"message":"No Record Found"}`)},
+		{name: "oversized", format: "json", media: "application/json", body: strings.NewReader(`{"message":"No Record Found","pad":"` + strings.Repeat("x", noRecordPeekBytes) + `"}`)},
+		{name: "unreadable", format: "json", media: "application/json", body: brokenReader{}},
+		{name: "html", format: "json", media: "text/html", body: strings.NewReader(`{"message":"No Record Found"}`)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body := &trackedBody{Reader: test.body}
+			budget := NewBudget(1 << 20)
+			client := clientFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: 400, ContentLength: -1, Header: http.Header{"Content-Type": {test.media}}, Body: body}, nil
+			})
+			_, status, err := DownloadSource(context.Background(), client, budget, Limits{MaxDownloadBytes: 1 << 20, RequestTimeout: time.Second}, "https://example.com/listings", test.format, t.TempDir(), time.Now())
+			var failure *Failure
+			if status != 400 || !errors.As(err, &failure) || failure.Retryable || !body.closed || budget.used != 0 {
+				t.Fatal(status, err, body.closed, budget.used)
+			}
+			if wantCode := map[bool]string{true: "SOURCE_CONTENT_TYPE", false: "SOURCE_HTTP"}[test.name == "html"]; failure.Code != wantCode {
+				t.Fatal(failure.Code)
+			}
+		})
 	}
 }
 

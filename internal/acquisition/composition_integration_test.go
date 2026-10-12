@@ -6,6 +6,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -46,14 +47,16 @@ func TestAcquisitionSDKComposition(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, test := range []struct {
-		name string
-		body []byte
-		job  config.ResolvedJob
-		want int
+		name   string
+		status int
+		body   []byte
+		job    config.ResolvedJob
+		want   int
 	}{
-		{"BSE", archive.Bytes(), config.ResolvedJob{ID: "debt", URL: "https://bse.example/DEBTBHAVCOPY21092026.zip", MemberPath: "fgroup21092026.csv", Filename: "BSE_fgroup21092026.csv", Format: "csv"}, 2},
-		{"NSDL", []byte(`{"isin":"INE121A07QY9"}`), config.ResolvedJob{ID: "details", URL: "https://nsdl.example/api", Filename: "INE121A07QY9_details.json", Format: "json"}, 1},
-		{"invalid NSDL", []byte(`{"isin":`), config.ResolvedJob{ID: "details", URL: "https://nsdl.example/api", Filename: "INE121A07QY9_details.json", Format: "json"}, 0},
+		{"BSE", 200, archive.Bytes(), config.ResolvedJob{ID: "debt", URL: "https://bse.example/DEBTBHAVCOPY21092026.zip", MemberPath: "fgroup21092026.csv", Filename: "BSE_fgroup21092026.csv", Format: "csv"}, 2},
+		{"NSDL", 200, []byte(`{"isin":"INE121A07QY9"}`), config.ResolvedJob{ID: "details", URL: "https://nsdl.example/api", Filename: "INE121A07QY9_details.json", Format: "json"}, 1},
+		{"invalid NSDL", 200, []byte(`{"isin":`), config.ResolvedJob{ID: "details", URL: "https://nsdl.example/api", Filename: "INE121A07QY9_details.json", Format: "json"}, 0},
+		{"NSDL no record", 400, []byte(`{"status":400,"message":"No Record Found","description":"","params":[]}`), config.ResolvedJob{ID: "listings", URL: "https://nsdl.example/api", Filename: "INE121A07QY9_listings.json", Format: "json"}, 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			objects := map[string][]byte{}
@@ -90,7 +93,7 @@ func TestAcquisitionSDKComposition(t *testing.T) {
 			})})
 			state := records{}
 			fetcher := acquisition.Fetcher{Client: &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
-				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/octet-stream"}}, ContentLength: int64(len(test.body)), Body: io.NopCloser(bytes.NewReader(test.body)), Request: r}, nil
+				return &http.Response{StatusCode: test.status, Header: http.Header{"Content-Type": {"application/octet-stream"}}, ContentLength: int64(len(test.body)), Body: io.NopCloser(bytes.NewReader(test.body)), Request: r}, nil
 			})}, Storage: &storage.Multipart{Client: client, Bucket: "artifacts", MaxBytes: 1 << 20}, Recorder: acquisition.StateRecorder{Store: state}, Budget: acquisition.NewBudget(1 << 20), Limits: acquisition.Limits{MaxAttempts: 3, RequestTimeout: time.Second, MaxDownloadBytes: 1 << 20, MaxExtractedBytes: 1 << 20, MaxTokenBytes: 1024, MaxZipEntries: 10, MaxZipMetadataBytes: 4096, MaxCompressionRatio: 100, MaxJSONDepth: 10}, TempRoot: t.TempDir()}
 			result, err := fetcher.Fetch(context.Background(), "run", test.job)
 			if (err == nil) != (test.want > 0) || len(objects) != test.want || len(state) != 2 {
@@ -101,6 +104,9 @@ func TestAcquisitionSDKComposition(t *testing.T) {
 			}
 			if test.want == 1 && !bytes.Equal(objects["/artifacts/"+result.Artifact.Key], test.body) {
 				t.Fatal("JSON bytes changed")
+			}
+			if finished := string(state["runs/run/pulls/"+test.job.ID+"/attempts/1/finished.json"]); test.want > 0 && (!strings.Contains(finished, fmt.Sprintf(`"status_code":%d`, test.status)) || strings.Contains(finished, "error_code")) {
+				t.Fatal("attempt record", finished)
 			}
 			if test.want == 2 && !bytes.Equal(objects["/artifacts/"+result.Archive.Key], test.body) {
 				t.Fatal("archive bytes changed")

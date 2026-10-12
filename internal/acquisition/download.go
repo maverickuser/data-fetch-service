@@ -1,7 +1,9 @@
 package acquisition
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -74,7 +76,13 @@ func DownloadSource(ctx context.Context, client HTTPClient, budget *Budget, limi
 		}
 	}()
 	status = response.StatusCode
-	if err := checkResponse(response, format, now); err != nil {
+	body, noRecord := noRecordBody(response, format)
+	if !noRecord {
+		if err := checkStatus(response, now); err != nil {
+			return nil, status, err
+		}
+	}
+	if err := checkRepresentation(response, format); err != nil {
 		return nil, status, err
 	}
 	reservation := response.ContentLength
@@ -95,7 +103,7 @@ func DownloadSource(ctx context.Context, client HTTPClient, budget *Budget, limi
 	}
 	download = &Download{File: file, Disposition: response.Header.Get("Content-Disposition"), release: release}
 	// Limiting writes to the reservation also bounds bodies that lie about Content-Length.
-	download.Bytes, err = io.Copy(localWriter{file}, io.LimitReader(response.Body, reservation))
+	download.Bytes, err = io.Copy(localWriter{file}, io.LimitReader(body, reservation))
 	if err != nil {
 		var local *Failure
 		if errors.As(err, &local) {
@@ -104,7 +112,7 @@ func DownloadSource(ctx context.Context, client HTTPClient, budget *Budget, limi
 		return nil, status, &Failure{Code: "SOURCE_READ", Retryable: parent.Err() == nil, Cause: err}
 	}
 	var extra [1]byte
-	_, err = io.ReadFull(response.Body, extra[:])
+	_, err = io.ReadFull(body, extra[:])
 	if err == nil {
 		return nil, status, &Failure{Code: "DOWNLOAD_LIMIT"}
 	}
@@ -135,8 +143,35 @@ func (w localWriter) Write(data []byte) (int, error) {
 	return n, nil
 }
 
-// checkResponse rejects partial/error documents before allocating temporary storage.
-func checkResponse(response *http.Response, format string, now time.Time) error {
+// noRecordMessage is the message NSDL returns with HTTP 400 when an ISIN has no data for an endpoint.
+const noRecordMessage = "No Record Found"
+
+// noRecordPeekBytes bounds how much of a 400 body is buffered to recognise a no-record answer.
+const noRecordPeekBytes = 4 << 10
+
+// noRecordBody returns the reader to spool and whether a JSON 400 response is a source's
+// "No Record Found" answer, which is stored as the job's document instead of failing the run.
+// It buffers at most noRecordPeekBytes and replays them ahead of the unread body; an unreadable,
+// oversized, or different 400 body is reported as not a no-record answer.
+func noRecordBody(response *http.Response, format string) (io.Reader, bool) {
+	if response.StatusCode != http.StatusBadRequest || format != "json" {
+		return response.Body, false
+	}
+	peeked, err := io.ReadAll(io.LimitReader(response.Body, noRecordPeekBytes+1))
+	if err != nil || len(peeked) > noRecordPeekBytes {
+		return response.Body, false
+	}
+	var answer struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(peeked, &answer) != nil || !strings.EqualFold(strings.TrimSpace(answer.Message), noRecordMessage) {
+		return response.Body, false
+	}
+	return io.MultiReader(bytes.NewReader(peeked), response.Body), true
+}
+
+// checkStatus rejects partial/error responses and classifies whether the source attempt may retry.
+func checkStatus(response *http.Response, now time.Time) error {
 	status := response.StatusCode
 	if status == http.StatusNotFound {
 		// A distinct code lets operators and smoke checks tell an unpublished file from other source errors.
@@ -145,6 +180,11 @@ func checkResponse(response *http.Response, format string, now time.Time) error 
 	if status != http.StatusOK {
 		return &Failure{Code: "SOURCE_HTTP", Retryable: status == 408 || status == 429 || status >= 500 && status <= 599, RetryAfter: retryAfter(response.Header.Get("Retry-After"), now)}
 	}
+	return nil
+}
+
+// checkRepresentation rejects encoded or wrongly typed documents before allocating temporary storage.
+func checkRepresentation(response *http.Response, format string) error {
 	encoding := strings.TrimSpace(response.Header.Get("Content-Encoding"))
 	if encoding != "" && !strings.EqualFold(encoding, "identity") {
 		return &Failure{Code: "SOURCE_ENCODING"}

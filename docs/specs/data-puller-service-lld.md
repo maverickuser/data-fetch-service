@@ -327,6 +327,8 @@ Agreed initial event scope and trigger assignment:
 
 Manual run/rerun APIs remain available for both events. The NSDL configuration above includes all six jobs from the functional specification, each producing a separate ISIN-prefixed JSON file. A single-job event follows exactly the same lifecycle as a multi-job event.
 
+Agreed NSDL no-record policy (2026-10-12): NSDL answers HTTP 400 with JSON `{"message":"No Record Found",...}` when an ISIN has no data for an endpoint (observed for `listings` on unlisted ISINs). For a JSON job, a 400 whose body (at most 4 KiB) is JSON with that `message` (trimmed, case-insensitive) is not a source error: the body is validated and stored unchanged as the job's file, the attempt records status code 400 without an error code, and the run continues to handoff. The processor treats the absent paths as "no update". Any other 400 remains `SOURCE_HTTP` without retry.
+
 Agreed BSE holiday/missing-file policy: run at 20:00 IST every Monday through Friday, including exchange holidays; no holiday calendar is applied. If the source returns HTTP 404, record the job and run as failed without retrying that deterministic response, and do not hand off to the processor. Recovery requires a manual rerun preserving the original `run_date`; there is no automatic next-day recovery or fallback to a previous trading day's file. Transient source failures retain the standard bounded retry policy.
 
 Expected business trigger chain: after bhavcopy is pulled and processed, the surrounding system checks whether each ISIN is already present and publishes an NSDL request for missing ISINs. This produces an initial high-volume batch, expected to decrease as ISIN coverage grows. For this service, those requests remain external ingress events; the existing design does not add ISIN master-data lookup or processor-completion polling to the puller. Size and test for burst arrivals, including an initial batch near 10,000 events, rather than assuming evenly distributed daily traffic. There is no strict batch completion latency target. Favour conservative queue-consumer concurrency, reliable processing, and verified upstream limits; validate that backlog drains within queue retention and monitor oldest-message age. Per-source timeouts, ownership deadlines, and bounded retries still apply.
@@ -832,6 +834,7 @@ SQS send arrows are at-least-once; durable intent and reconciliation cover a cra
 | Invalid event/configuration | API 400/422; invalid SQS receipt recorded without source calls |
 | Source network timeout, 408, 429, 5xx | Up to 3 attempts, jitter and bounded Retry-After |
 | Source deterministic 4xx, malformed content, ZIP selection failure | Fail job without retry |
+| NSDL JSON 400 "No Record Found" | Store the body as the job's file; not a failure (section 5 NSDL no-record policy) |
 | BSE file unavailable (HTTP 404), including exchange holidays | Fail run; no handoff or automatic next-day recovery; manual rerun with original run date |
 | One required job fails | Fail group; no processor request; manual full rerun |
 | Worker crashes/times out during pulls | After ownership expiry, automatically rerun the complete event in a linked child run; 3 retries after initial execution, then manual recovery |
