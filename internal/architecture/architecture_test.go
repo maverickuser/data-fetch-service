@@ -1,7 +1,6 @@
 package architecture
 
 import (
-	"bufio"
 	"fmt"
 	"go/parser"
 	"go/token"
@@ -187,14 +186,12 @@ func importGraph(t *testing.T) map[string][]string {
 // modulePath returns the module path declared in go.mod.
 func modulePath(t *testing.T) string {
 	t.Helper()
-	file, err := os.Open(filepath.Join(repositoryRoot, "go.mod"))
+	content, err := os.ReadFile(filepath.Join(repositoryRoot, "go.mod"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		if module, ok := strings.CutPrefix(strings.TrimSpace(scanner.Text()), "module "); ok {
+	for _, line := range strings.Split(string(content), "\n") {
+		if module, ok := strings.CutPrefix(strings.TrimSpace(line), "module "); ok {
 			return strings.TrimSpace(module)
 		}
 	}
