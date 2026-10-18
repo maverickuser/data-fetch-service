@@ -1,20 +1,20 @@
 # Structured File Processing — Low-Level Design
 
 Status: design closed for implementation planning. All open questions were resolved on 2026-10-02.
-Updated: 2026-10-02.
+Updated: 2026-10-18.
 Source specification: [structured-file-processing-spec.md](structured-file-processing-spec.md).
 
-This document records the CSV and JSON processing rules. Both formats are submitted through an S3 manifest, as confirmed against the fetch-service LLD and implementation plan. Sections 2–11 describe CSV unless explicitly stated otherwise; section 13 defines JSON-specific behavior. Section 15 records internal field names; section 17 records agreed schemas and business-table names. The submission API is defined in the OpenAPI 3.1 contract. Read endpoints are public and unauthenticated; POST requires AWS IAM authorization at API Gateway (section 23). Read APIs are in section 20 and [data-processing-service-read-openapi.yaml](data-processing-service-read-openapi.yaml); operational defaults, retention, and sizing in section 21; table definitions in section 22. Where an earlier section and sections 17.5 or 20–23 differ, the later section is authoritative; in particular section 23 replaces every earlier reference to ECS, containers, load balancers, listeners, and a polling dispatcher. The standalone YAML contract files in [`contracts/`](../../contracts) are authoritative over the illustrative snippets in section 6.
+This document records the CSV and JSON processing rules. Both formats are submitted through an S3 manifest, as confirmed against the fetch-service LLD and implementation plan. Sections 2–11 describe CSV unless explicitly stated otherwise; section 13 defines JSON-specific behavior. Section 15 records internal field names; section 17 records agreed schemas and business-table names. The submission API is defined in the OpenAPI 3.1 contract. Read endpoints are public and unauthenticated; POST requires AWS IAM authorization at API Gateway (section 23). Read APIs are in section 20 and [data-processing-service-read-openapi.yaml](data-processing-service-read-openapi.yaml); operational defaults, retention, and sizing in section 21; table definitions in section 22. Section 23 defines the serverless runtime: Lambda functions, API Gateway, the FIFO queue, and the outbox sends. Every section describes the current design; a contradiction between sections is a defect to fix in the same PR that finds it, not a rule to resolve by section order. The standalone YAML contract files in [`contracts/`](../../contracts) are authoritative over the illustrative snippets in section 6.
 
 ## 1. Scope and agreed technology
 
-- Java with Spring Boot, running on AWS Lambda behind Amazon API Gateway (revised 2026-10-02; this supersedes the earlier ECS Fargate and load-balancer design). Section 23 is authoritative for the runtime architecture.
+- Java with Spring Boot, running on AWS Lambda behind Amazon API Gateway (agreed 2026-10-02). Section 23 describes the runtime architecture.
 - The worker is an SQS-triggered Lambda function, without Spring Batch. Application processing records govern execution, attempts, recovery, and the agreed transaction boundaries; do not add Spring Batch metadata tables or its job repository.
 - Amazon SQS for asynchronous processing.
 - The outbound security-details SQS queue is externally provisioned. Its ARN and queue URL are supplied to this service; this project's Terraform does not create, import/manage, or destroy that queue. Internal file-processing queue ownership is a separate concern.
 - PostgreSQL on Amazon RDS for jobs, rejected records, validation issues, outbox events, and accepted securities data. Complete canonical run output is stored in the service's own S3 bucket (section 17.5).
 - One database with two agreed schemas: `securities_data` for accepted securities-domain data and `data_processing` for jobs, rejected records, validation issues, and delivery bookkeeping. See section 17 for table names and section 22 for definitions.
-- Repository: `https://github.com/maverickuser/data-processing-service`. GitHub Actions provides CI and CD; Terraform manages service-owned infrastructure. Service documents, contracts, and code live in that repository; the implementation plan is [docs/plans/data-processing-service-implementation-plan.md](../plans/data-processing-service-implementation-plan.md). Adapt the fetch-service engineering guidance to Java/Spring Boot rather than adopting its Go/Lambda architecture or language-specific commands.
+- Repository: `https://github.com/maverickuser/data-processing-service`. GitHub Actions provides CI and CD; Terraform manages service-owned infrastructure. Service documents, contracts, and code live in that repository; the implementation plan is [docs/plans/data-processing-service-implementation-plan.md](../plans/completed/data-processing-service-implementation-plan.md). Adapt the fetch-service engineering guidance to Java/Spring Boot rather than adopting its Go/Lambda architecture or language-specific commands.
 - AWS deployment region is `ap-south-1`, supplied by the GitHub Actions configuration variable `aws_region` (`${{ vars.aws_region }}`). Pass it to Terraform as `TF_VAR_aws_region` and to AWS authentication/SDK configuration consistently; do not hardcode the region in application logic.
 - Deploy one environment, `prod`, initially. Do not provision separate development or staging environments. Persistent and disposable Terraform roots/states both belong to this production environment; lifecycle separation does not imply multiple deployment environments.
 - Lambda functions and RDS run in private subnets of the shared VPC. Public read-only APIs and the submission route are served by one API Gateway HTTP API. Read routes are public and unauthenticated. `POST /v1/event-ingestions` requires AWS IAM authorization (SigV4) and only the fetch service's delivery role is permitted to invoke it; there are no load balancers. Authentication for the public read surface may be added later. AWS IAM roles govern service access to S3, SQS, and other AWS resources. See section 23.
@@ -459,17 +459,17 @@ After complete structural validation, row validation, and duplicate selection:
 5. Upsert accepted trades and their canonical references.
 6. Only for securities newly inserted by this accepted-trade transaction, durably record a security-details event in the same transaction, as described in section 14. Existing securities never trigger a new event through trade processing, even if they contain only ISIN.
 7. Record the successful publication and final job status/counts in that same transaction.
-8. Commit, then acknowledge the queue message. Dispatch committed security-details events asynchronously.
+8. Commit, then acknowledge the queue message. The same invocation then sends the committed security-details events to SQS, unless an older event in the same ordering group is still pending; the daily sweeper delivers anything left (section 23.4).
 
 A transaction failure rolls back all trade updates for the file. Quarantine evidence already persisted remains available. A queue redelivery after a committed publication checks the durable terminal state and does not publish again.
 
-### 8.2 Proposed reliable delivery design
+### 8.2 Reliable delivery through the outbox
 
-SQS and PostgreSQL do not share a database transaction. Proposed implementation: persist the job and an outbox entry together, then use a dispatcher to deliver it to SQS. This avoids accepting a job in PostgreSQL but silently losing it before enqueueing.
+SQS and PostgreSQL do not share a database transaction. Admission persists the job and an outbox entry in one transaction. After commit, the same invocation sends the entry to SQS; if that send fails, or an older entry in the same ordering group is still pending, the daily sweeper delivers it (section 23.4). This avoids accepting a job in PostgreSQL but silently losing it before enqueueing.
 
-Use SQS FIFO with a message group derived from the trading date to support the agreed ordering. A durable per-date submission sequence and ordered outbox dispatch define order; HTTP requests that arrive concurrently are ordered by that acceptance sequence. Queue deduplication alone does not replace API idempotency or durable job-state checks.
+The processing queue is SQS FIFO. The message group is the job's ordering group: `trade-date:{date}` for CSV and `isin:{isin}` for JSON (section 23.3). A durable acceptance sequence within each ordering group (`ingestion_requests.acceptance_sequence`) and in-order outbox sends define order; HTTP requests that arrive concurrently are ordered by that sequence. FIFO deduplication uses the outbox event ID. Queue deduplication alone does not replace API idempotency or durable job-state checks.
 
-These queue/outbox details are implementation proposals to review with the operational design. They must preserve ordering during retries and must not let a delayed older job overwrite a newer committed submission.
+Ordering holds through retries, and a delayed older job never overwrites a newer committed submission.
 
 ### 8.3 Retry policy
 
@@ -483,7 +483,7 @@ These queue/outbox details are implementation proposals to review with the opera
 
 ## 9. Job status and review
 
-Proposed nonterminal statuses are `QUEUED`, `PROCESSING`, and `RETRY_PENDING`.
+Nonterminal statuses are `QUEUED`, `PROCESSING`, and `RETRY_PENDING` (section 20.3).
 
 Agreed terminal outcomes:
 
@@ -514,12 +514,12 @@ Proposed stable error codes include `REQUIRED_HEADER_MISSING`, `DUPLICATE_HEADER
 
 ## 10. Component responsibilities
 
-| Proposed Java component | Responsibility |
+| Java component | Responsibility |
 |---|---|
 | Submission service | Validate request, enforce idempotency, pin contracts, persist job/outbox |
 | Contract registry | Load and validate versioned YAML; resolve fixed Java rules |
-| Outbox dispatcher | Reliably enqueue jobs in per-date order |
-| Processing worker | Claim job, track attempts, orchestrate stages, acknowledge after durable outcome |
+| Outbox dispatcher | Send committed outbox events in ordering-group order, from the committing invocation and from the daily sweeper (section 23.4) |
+| Processing worker | Claim job, track attempts, orchestrate stages, acknowledge after durable outcome (the worker Lambda, section 23.1) |
 | S3 source reader | Read unchanged source with bounded size and source metadata |
 | CSV canonicalizer | Parse structure, resolve headers, preserve selected raw cells and locations |
 | Field normalizer/parser | Apply declared normalization and exact typed parsing |
@@ -527,7 +527,7 @@ Proposed stable error codes include `REQUIRED_HEADER_MISSING`, `DUPLICATE_HEADER
 | Duplicate resolver | Choose last valid row per normalized ISIN |
 | Trade mapper | Produce internal trades from accepted typed canonical rows |
 | Trade publisher | Atomically upsert the accepted set and finalize publication |
-| Review/status service | Read statuses, counts, canonical history, and quarantine errors |
+| Review/status service | Read statuses, counts, and errors for the read APIs (section 20) |
 
 Do not retain an entire file as a large object graph merely because the input limit is 10 MB; canonical objects can be much larger than source bytes. Stream parsing and persist bounded batches. Duplicate selection keeps, per normalized ISIN, only the last valid record seen while streaming; it does not depend on persisted rows. The atomic trade transaction can execute bounded write batches while remaining a single transaction.
 
@@ -554,7 +554,7 @@ All design decisions needed for implementation were closed on 2026-10-02. Delibe
 - Per-submission collection-membership tracking (which collateral assets or listings appear in the latest source).
 - Downloadable error reports, review-correction workflow, and S3 export of rejected records.
 - Manual refresh or re-fetch of security details for an existing ISIN.
-- Multi-AZ database, second NAT gateway, and additional environments.
+- Multi-AZ database, a NAT gateway (none by default, section 21.2), and additional environments.
 
 Java/Spring versions and the CSV parser library are implementation-plan choices.
 
@@ -680,7 +680,7 @@ Accept manifest request with idempotency key
 - Publish all valid changes for the request in one transaction; any publication failure rolls back the complete set of business-data changes.
 - Retain source/canonical/error evidence independently for traceability and review, following the agreed canonical-history principle.
 - Reuse API idempotency semantics, polling, and three total attempts for temporary failures from CSV. Content errors are not automatically retried.
-- Serialize requests per ISIN; preserve ordering throughout retries. Proposed queue group identity must distinguish JSON ISIN groups from CSV trade-date groups.
+- Serialize requests per ISIN; preserve ordering throughout retries. The queue group identity distinguishes JSON ISIN groups from CSV trade-date groups: `isin:{isin}` and `trade-date:{date}` (section 23.3).
 
 ### 13.8 Outcomes
 
@@ -776,7 +776,7 @@ CloudEvents identifies duplicates by `(source, id)`; its timestamp uses RFC 3339
 
 SQS transport convention: serialize one complete CloudEvent as UTF-8 JSON in `MessageBody`. Use an application-defined string message attribute `contentType=application/cloudevents+json` to identify the envelope. This is our SQS convention, not a claimed standard SQS protocol binding. Keep `data` as a JSON object rather than a string containing serialized JSON. The queue destination remains deployment configuration, outside the event. No EventBridge or SNS wrapper is needed for this direct SQS path.
 
-Proposed implementation: in the same PostgreSQL transaction as the accepted trades, insert missing securities and persist an outbox event only for each ISIN actually inserted by this transaction. Send only committed events to SQS through a retrying dispatcher. Do not send an event directly before commit: the trade could subsequently roll back. Do not rely on a one-off send after commit without a durable outbox: a crash could otherwise lose the request.
+In the same PostgreSQL transaction as the accepted trades, insert missing securities and persist an outbox event only for each ISIN actually inserted by this transaction. Send only committed events to SQS: the committing invocation sends them, and the daily sweeper retries any still pending (section 23.4). Do not send an event directly before commit: the trade could subsequently roll back. Do not rely on a one-off send after commit without a durable outbox: a crash could otherwise lose the request.
 
 A temporary SQS failure leaves the event pending for delivery; it does not undo committed trades or require republishing the CSV. Track delivery failure/retry independently from the completed trade-processing job.
 
@@ -784,7 +784,7 @@ A temporary SQS failure leaves the event pending for delivery; it does not undo 
 
 The user has removed the proposed `security_enrichment_requests` table. Do not create a separate enrichment lifecycle or per-field completeness tracker. The outbox tracks event delivery; existing JSON ingestion/job records track processing results. The download service owns its fetch execution state.
 
-The dispatcher preserves the same CloudEvent envelope across send retries. The consumer durably deduplicates by `(source, id)`; transport retries must not start duplicate download jobs. A genuinely new intentional fetch request receives a new event ID. SQS transport identity is not business identity.
+Every send, from either path, preserves the same CloudEvent envelope across retries. The consumer durably deduplicates by `(source, id)`; transport retries must not start duplicate download jobs. A genuinely new intentional fetch request receives a new event ID. SQS transport identity is not business identity.
 
 Use the database insert result as the trigger, rather than an unchecked read followed by an insert. Proposed PostgreSQL implementation: `INSERT ... ON CONFLICT (isin) DO NOTHING RETURNING isin`; create an outbox event only for a returned ISIN. Execute the security insert, accepted trade publication, and event intent in one transaction. The ISIN primary key ensures concurrent transactions cannot both create the same security and trigger new initial events.
 
@@ -1047,7 +1047,7 @@ UUID identity does not replace business duplicate prevention. Append-only collec
 
 ### 17.5 Agreed canonical storage and references
 
-Revised 2026-10-02, superseding the earlier decision to hold all canonical data in PostgreSQL (and any earlier statement in this document that canonical history is stored in PostgreSQL). Original source files remain in S3.
+Agreed 2026-10-02: complete canonical output is stored in S3, not PostgreSQL. Original source files remain in S3.
 
 - Rejected canonical records only (CSV rows with disposition `QUARANTINED_INVALID` or `QUARANTINED_SUPERSEDED`; JSON fields, entries, sections, or files that fail validation) are stored in PostgreSQL in `data_processing`, with their raw selected values, location, and errors. They back the error-review API. For CSV (implemented in PR 26b), each quarantined row is one `rejected_records` row holding its full canonical line, and each of its issues is one `validation_issues` row: the field errors in field order, then the row errors, numbered from 1 in file order within the run; a field issue keeps the field's raw value as a JSON string. Both are written in batches of 500 rows. Implementation choice (2026-10-05, PR 35b): for JSON, each rejected part is one `rejected_records` row located by `json_path` (disposition `FILE_SKIPPED`, `SECTION_REJECTED`, `FIELD_REJECTED`, `ENTRY_FIELDS_REJECTED`, `ENTRY_SKIPPED`, or `VALUE_IGNORED` for a valid value a stage-2 rule ignored, such as coverage beside `Unsecured`), holding that part's canonical evidence. Each issue is one `validation_issues` row with field, JSONPath, raw value with its JSON type, and action taken, numbered from 1 in manifest file order, then within a file: sections, scalars, entries, ignored values. A missing value has no `raw_value`; an object or array is kept whole as JSON (review finding AJ-1), and a section of the wrong kind has none, as its error names the expected and actual kinds. An explicit `null` never produces an issue, as it means no update. A request's JSON files are bounded in size, so all its rejections are written in one batch.
 - An accepted CSV row with a field whose invalid value was ignored (section 5.2) has no `rejected_records` row: the row itself is published. Each of its ignored fields' errors is one `validation_issues` row with no `rejected_record_id`, its field and raw value, and the action taken `Ignored the invalid value; the rest of the row was accepted.`, numbered in file order with the other issues (decision 0004).

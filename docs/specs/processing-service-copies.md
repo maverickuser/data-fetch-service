@@ -2,7 +2,7 @@
 
 These files are byte-for-byte copies from [data-processing-service](https://github.com/maverickuser/data-processing-service), kept here so an agent working in this repository can read the processor's design and admission contract without leaving the checkout. Never edit them here: change them in data-processing-service, merge there, then re-sync.
 
-Source commit: `b89c44104bd5` (origin/main, committed 2026-10-18).
+Source commit: `f5c122e29a72` (origin/main, committed 2026-10-18).
 
 | Copy | Role here |
 |---|---|
