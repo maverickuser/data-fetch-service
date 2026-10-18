@@ -464,6 +464,8 @@ Apply 30-day lifecycle expiry to run artifacts, run state, listings, and request
 
 Exclude coordination and acceptance metadata from the general lifecycle. Retain the latest accepted compact evidence per execution key. The reconciler may delete superseded acceptance records after 30 days under the same ownership protocol; do not put a blanket expiry on this prefix. This preserves hashes even after old artifacts disappear. Long-lived evidence contains fingerprint, contracts, revision, and acceptance time, not a promise that old files remain readable.
 
+Agreed (2026-10-18): the standard service teardown (`Destroy service` workflow) destroys the runtime but keeps the artifact and state buckets, their settings, and their Terraform state, so accepted fingerprints survive a teardown and redeploy. Deleting those buckets is a separate explicit operation. See the [runbook](../runbook.md#tearing-down).
+
 ## 8. Coordination and append-only state
 
 ### Coordination document

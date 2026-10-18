@@ -8,6 +8,8 @@ Shared network (2026-10-02): the VPC comes from the separate `cloud-platform-net
 
 No VPC (2026-10-06): the fetch Lambdas moved out of the VPC so the shared network can drop its NAT gateway. The `Shared network` workflow, the network remote state, the VPC preconditions, and the Lambdas' `ec2:` permissions were removed; the release no longer applies the network.
 
+Service teardown (2026-10-18): manual `Destroy service` workflow added; it destroys the runtime and keeps the artifact and state buckets in Terraform state. It has not run.
+
 | Increment | Status |
 |---|---|
 | 01 Foundation | Implemented locally; separate agent reviewed staged content with no blockers |
