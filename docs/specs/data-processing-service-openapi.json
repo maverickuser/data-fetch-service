@@ -1,24 +1,32 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Data Processing Service \u2014 Upstream Admission API",
+    "title": "Data Processing Service — Upstream Admission API",
     "version": "1.0.0",
-    "description": "Design contract, not evidence of deployment. Submit an immutable S3 manifest reference in a CloudEvent. No application authentication initially; POST is reachable only through the internal ALB in the shared VPC. Configure the deployment base URL; / is a relative placeholder. Upstream success means HTTP 202 only; no callback or mandatory polling. Public read API schemas are outside this admission document. Stored S3 manifests retain the agreed CloudEvent with data.files; HTTP events use data.manifest. Both carry matching dataset/event/run/input/fingerprint metadata but have distinct CloudEvent ids. CloudEvents HTTP binding: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/bindings/http-protocol-binding.md . Errors: https://www.rfc-editor.org/rfc/rfc9457.html ."
+    "description": "Design contract, not evidence of deployment. Submit an immutable S3 manifest reference in a CloudEvent. POST requires AWS IAM authorization (Signature Version 4) at API Gateway and is permitted only to the delivery role of the fetch service; there is no other application authentication. Configure the deployment base URL; / is a relative placeholder. Upstream success means HTTP 202 only; no callback or mandatory polling. Public read API schemas are outside this admission document. Stored S3 manifests retain the agreed CloudEvent with data.files; HTTP events use data.manifest. Both carry matching dataset/event/run/input/fingerprint metadata but have distinct CloudEvent ids. CloudEvents HTTP binding: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/bindings/http-protocol-binding.md . Errors: https://www.rfc-editor.org/rfc/rfc9457.html ."
   },
   "servers": [
     {
       "url": "/",
-      "description": "Replace with the configured internal HTTPS processor origin; never expose POST through the public read ALB."
+      "description": "Replace with the processor's API Gateway origin (https://processing.kagent.app). Sign the request with SigV4 for service execute-api in the deployment region."
     }
   ],
-  "security": [],
+  "security": [
+
+  ],
   "paths": {
     "/v1/event-ingestions": {
       "post": {
         "operationId": "submitEventIngestion",
         "summary": "Durably accept a manifest for asynchronous processing",
         "description": "Validate only the HTTP event and idempotency at admission. Do not read S3 on this request path. Worker reads manifest and files after admission; missing objects, access failures, malformed manifest, checksum mismatch, or conflicting metadata are processing-job errors and cannot retroactively change HTTP 202. Compare stored and submitted dataschema, source, type, subject and data schema_version/event_type/event_id/run_id/inputs/dataset_fingerprint; ids and creation times need not match. Source is asserted metadata, not proof of identity. Idempotency-Key must equal data.run_id. For replays compare the whole parsed event independent of JSON whitespace and object-key order, preserving scalar values and array order, including time and extension attributes. Persist the original receipt and uniqueness of (source,id) and key atomically with the job and dispatch intent. Timeouts and lost responses must be retried with the original event and key. Never regenerate time/id on retry.",
-        "security": [],
+        "security": [
+          {
+            "awsSigV4": [
+
+            ]
+          }
+        ],
         "parameters": [
           {
             "name": "Idempotency-Key",
@@ -289,6 +297,14 @@
     }
   },
   "components": {
+    "securitySchemes": {
+      "awsSigV4": {
+        "type": "apiKey",
+        "name": "Authorization",
+        "in": "header",
+        "description": "AWS Signature Version 4 for service execute-api. API Gateway rejects an unsigned or unauthorized request with HTTP 403 and its own JSON body before the request reaches the application."
+      }
+    },
     "schemas": {
       "S3ManifestReference": {
         "type": "object",
