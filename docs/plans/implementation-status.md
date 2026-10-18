@@ -10,7 +10,7 @@ No VPC (2026-10-06): the fetch Lambdas moved out of the VPC so the shared networ
 
 Harness checks (2026-10-18, [#28](https://github.com/maverickuser/data-fetch-service/pull/28)): `internal/architecture` enforces the package import graph and keeps AWS SDKs out of business packages; `make check-docs` also checks AGENTS.md paths and packages, `make` targets, and the decision index; the processing-service LLD and admission OpenAPI copies were re-synced (the OpenAPI copy now documents SigV4); finished plans moved to `plans/completed/`. Documentation and tests only; nothing deployed.
 
-Service teardown (2026-10-18): manual `Destroy service` workflow added in [#24](https://github.com/maverickuser/data-fetch-service/pull/24); it destroys the runtime and keeps the artifact and state buckets in Terraform state. It has not run.
+Service teardown (2026-10-18): manual `Destroy service` workflow added in [#24](https://github.com/maverickuser/data-fetch-service/pull/24); it destroys the runtime and keeps the artifact and state buckets in Terraform state. The first apply failed on the plan-artifact layout, fixed in [#26](https://github.com/maverickuser/data-fetch-service/pull/26). Run 39110438997 at `e97724c` then destroyed 79 runtime resources and kept the 14 bucket resources in state; the service is not currently deployed.
 
 | Increment | Status |
 |---|---|
