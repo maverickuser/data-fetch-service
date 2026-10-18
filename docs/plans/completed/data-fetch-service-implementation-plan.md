@@ -2,8 +2,8 @@
 
 Date: 2026-09-27
 Repository: https://github.com/maverickuser/data-fetch-service
-Source of truth: [Data Puller Service LLD](../specs/data-puller-service-lld.md)
-Implementation inputs: [Implementation Context Specification](data-fetch-service-implementation-context-spec.md)
+Source of truth: [Data Puller Service LLD](../../specs/data-puller-service-lld.md)
+Implementation inputs: [Implementation Context Specification](../data-fetch-service-implementation-context-spec.md)
 
 ## Objective and boundaries
 
@@ -168,12 +168,12 @@ Exit evidence: mocked component tests for BSE's single processing entry and NSDL
 
 ## PR 07 — Processor delivery and acceptance commit
 
-Contract source: [OpenAPI JSON](../specs/data-processing-service-openapi.json) and [equivalent YAML](../specs/data-processing-service-openapi.yaml), API version 1.0.0. Include both in the repository specification bundle; CI must check semantic equivalence. Validate outgoing BSE/NSDL CloudEvents, receipts and problem responses against their schemas, including stable retry envelopes, the 64-KiB request limit, fingerprint format, subject/input agreement, terminal 400/409/413/415 handling and bounded 429/500/503 retries. These tests remain local with mocked dependencies until final release.
+Contract source: [OpenAPI JSON](../../specs/data-processing-service-openapi.json) and [equivalent YAML](../../specs/data-processing-service-openapi.yaml), API version 1.0.0. Include both in the repository specification bundle; CI must check semantic equivalence. Validate outgoing BSE/NSDL CloudEvents, receipts and problem responses against their schemas, including stable retry envelopes, the 64-KiB request limit, fingerprint format, subject/input agreement, terminal 400/409/413/415 handling and bounded 429/500/503 retries. These tests remain local with mocked dependencies until final release.
 
 Branch: `stack/07-delivery`; base: PR 06. LLD: sections 11, 13.
 
 - Implement Delivery Lambda, configurable HTTP target, attempt reservation, three-attempt budget, and stable run-ID idempotency key.
-- Follow [the processor OpenAPI contract](../specs/data-processing-service-openapi.json): POST a structured CloudEvent using `application/cloudevents+json`, with `data.manifest` pointing to the immutable S3 CloudEvent containing `data.files`. Preserve the submission id/time/body on retries; use a distinct submission ID from the stored manifest ID. Validate both BSE and NSDL examples, RFC 9457 errors, and replayed admission receipts.
+- Follow [the processor OpenAPI contract](../../specs/data-processing-service-openapi.json): POST a structured CloudEvent using `application/cloudevents+json`, with `data.manifest` pointing to the immutable S3 CloudEvent containing `data.files`. Preserve the submission id/time/body on retries; use a distinct submission ID from the stored manifest ID. Validate both BSE and NSDL examples, RFC 9457 errors, and replayed admission receipts.
 - Accept only HTTP 202; persist acceptance evidence, complete the run, advance the baseline, and release the claim through recoverable transitions.
 - Handle unknown outcomes and `PROCESSOR_NOT_CONFIGURED` without creating a false baseline.
 

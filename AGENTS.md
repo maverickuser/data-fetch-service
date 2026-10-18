@@ -1,6 +1,6 @@
 # Agent instructions — data-fetch-service
 
-Active repository guidance. All planned increments are merged: admission/read APIs, acquisition, complete-event pull, processor delivery, reconciler and automatic retries, reruns and delivery retries, Terraform, and the release pipeline. See the status file for what has been deployed. Do not edit `docs/specs/structured-file-processing-lld.md`; it is a read-only copy of the processing service's LLD.
+Active repository guidance. All planned increments are merged: admission/read APIs, acquisition, complete-event pull, processor delivery, reconciler and automatic retries, reruns and delivery retries, Terraform, and the release pipeline. See the status file for what has been deployed. Never edit the processing-service copies listed in `docs/specs/processing-service-copies.md` (its LLD, specification, and admission OpenAPI); change them in data-processing-service and re-sync with `make sync-processing-docs`.
 
 ## Purpose and reading order
 
@@ -10,7 +10,7 @@ Read:
 
 1. `docs/README.md` for the documentation map and authority labels.
 2. `docs/specs/data-puller-service-lld.md` for current behaviour and architecture.
-3. `docs/plans/data-fetch-service-implementation-plan.md` and `implementation-status.md` in the same directory for the delivered increments and verified progress.
+3. `docs/plans/implementation-status.md` for verified progress. `docs/plans/active/` holds the plan of any change that spans several PRs; `docs/plans/completed/` holds finished plans, including the original build plan and its per-PR descriptions; `docs/plans/tech-debt.md` lists known gaps.
 4. `docs/specs/data-puller-service-spec.md` for original requirements; the LLD supersedes conflicting historical decisions.
 5. `docs/specs/structured-file-processing-spec.md` when working on the processor integration boundary.
 
@@ -25,6 +25,7 @@ Keep current instructions and user-approved changes reflected in the LLD. Do not
 - `internal/state`, `internal/storage`, `internal/queue`, `internal/delivery`: S3 coordination/artifacts, internal SQS publishing, and downstream handoff.
 - `internal/recovery`: reconciler scans that repair durable intents and expired ownership.
 - `internal/runtime`: wires Lambda entry points to the configured AWS adapters.
+- `internal/architecture`: test-only package that enforces the package layering and where AWS SDKs may be imported; its `allowedImports` table is the dependency graph. A new import between module packages fails `make test-unit` until it is added there deliberately.
 - `internal/api`, `internal/telemetry`: REST adapters, logs, and metrics. `internal/api/openapi.yaml` is the client contract, served at `/docs`; update it with any route or payload change (its drift test runs in `make test-unit`).
 - `config/events.yaml`, `config/native-events.yaml`, `config/environments/prod.yaml`: version-controlled effective configuration and approved native EventBridge mappings.
 - `infra/bootstrap`, `infra/service`: separate Terraform backend bootstrap and production runtime resources.
@@ -32,7 +33,7 @@ Keep current instructions and user-approved changes reflected in the LLD. Do not
 - `internal/smoke`, `cmd/smoke`: real-endpoint smoke runner, tested locally against a fake deployment.
 - `.github/workflows`: CI checks (`quality.yml`), manual smoke (`smoke.yml`), isolated load/resource fixtures (`load-resource.yml`), staged release (`release.yml`), data-preserving service teardown (`destroy.yml`), and disposable-resource AWS integration tests (`aws-integration.yml`, manual or required by release `plan`/`apply`).
 
-Only claim a package or feature exists after inspecting the checkout; update this map when packages are added, renamed, or removed.
+Only claim a package or feature exists after inspecting the checkout; update this map when packages are added, renamed, or removed (`make check-docs` fails until you do).
 
 ## Local command contract
 
@@ -47,7 +48,8 @@ Implemented commands:
 - `make test-load`: run isolated 64-MiB streaming, 32-MiB ZIP, and slow-response acquisition fixtures with timing/allocation logs; the manual workflow also captures peak process memory.
 - `make build`: build implemented production entry points/packages, including the API, Admission, Pull, Delivery, and Reconciler Lambdas.
 - `make configcheck`: validate the effective event configuration and print its revision.
-- `make check-docs`: validate repository documentation links.
+- `make check-docs`: check documentation against the checkout: relative links, paths and packages named in this file, `make` targets named in current documents, and the decision-record index. Its own tests run first.
+- `make sync-processing-docs`: copy the processing service's LLD, specification, and admission OpenAPI from `origin/main` of `PROCESSING_DIR` (default `../data-processing-service`) and record the source commit.
 - `make check-workflows`: validate the release dependency chain, reusable AWS integration trigger, the teardown's guards and kept-resource set, and workflow shell syntax.
 - `make check-contract`: verify supplied OpenAPI JSON/YAML equivalence (Ruby standard library).
 - `make check-infra`: Terraform `fmt -check`, `validate`, and mocked `terraform test` for `infra/bootstrap` and `infra/service`; pass `TERRAFORM=` when the pinned 1.16.4 binary is not on `PATH`. Needs network for the provider, no AWS credentials.
@@ -87,15 +89,8 @@ Implement, agent-review, and run deterministic tests locally; PRs never apply Te
 
 ## Context management
 
-The repository, not the conversation, holds durable state: the implementation plan, `docs/plans/implementation-status.md`, the branch, and the PR. Shrinking the context is therefore always safe once that state is written down.
-
-- **Compact** (`/compact` in Claude Code or Codex) when the context is roughly two-thirds full, after a PR merges, or after a review pass ends. Do it between steps, never in the middle of an edit or while chasing a failing check.
-- **Keep** in the summary: the plan PR number, branch, parent branch, and PR link; files changed and why; checks run with their result and the exact failing test or error; open review findings; and user decisions or open questions not yet recorded in the repository.
-- **Drop**: full file contents, passing test output, old command logs, superseded attempts, and documents that can simply be re-read.
-- **Purge** (`/clear` or a new session) instead of compacting when switching to an unrelated PR or stack, or when the context is mostly a dead end. Before purging, record progress in `implementation-status.md` or the PR description.
-- If a summary would lose an unrecorded decision, write it to the spec, a decision record, or the status file first.
-- After any compact or purge, re-read this file and the status file, and check the branch and `git status` before editing.
+The repository, not the conversation, holds durable state. When to compact or clear, and what a summary must keep, is in `docs/engineering/context-management.md`. After any compact or purge, re-read this file and the status file, and check the branch and `git status` before editing.
 
 ## Keeping guidance current
 
-Update canonical specs, examples, commands, and status when behaviour changes. Store substantial new decisions in `docs/decisions/` and link them from the LLD. Keep this file concise by linking detailed designs rather than copying them. Add scoped guidance only for real directory-specific requirements.
+Update canonical specs, examples, commands, and status when behaviour changes. Store substantial new decisions in `docs/decisions/`, list them in its README, and link them from the LLD. Add a known gap you leave unfixed to `docs/plans/tech-debt.md`, and remove it in the PR that fixes it. Keep this file concise by linking detailed designs rather than copying them. Add scoped guidance only for real directory-specific requirements. `CLAUDE.md` only imports this file, so Claude Code and other agents read the same instructions.

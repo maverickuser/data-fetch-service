@@ -3,8 +3,9 @@ info:
   title: Data Processing Service — Upstream Admission API
   version: 1.0.0
   description: 'Design contract, not evidence of deployment. Submit an immutable S3
-    manifest reference in a CloudEvent. No application authentication initially; POST
-    is reachable only through the internal ALB in the shared VPC. Configure the deployment
+    manifest reference in a CloudEvent. POST requires AWS IAM authorization
+    (Signature Version 4) at API Gateway and is permitted only to the delivery
+    role of the fetch service; there is no other application authentication. Configure the deployment
     base URL; / is a relative placeholder. Upstream success means HTTP 202 only; no
     callback or mandatory polling. Public read API schemas are outside this admission
     document. Stored S3 manifests retain the agreed CloudEvent with data.files; HTTP
@@ -13,8 +14,8 @@ info:
     . Errors: https://www.rfc-editor.org/rfc/rfc9457.html .'
 servers:
 - url: /
-  description: Replace with the configured internal HTTPS processor origin; never
-    expose POST through the public read ALB.
+  description: Replace with the processor's API Gateway origin (https://processing.kagent.app).
+    Sign the request with SigV4 for service execute-api in the deployment region.
 security: []
 paths:
   /v1/event-ingestions:
@@ -34,7 +35,8 @@ paths:
         the original receipt and uniqueness of (source,id) and key atomically with
         the job and dispatch intent. Timeouts and lost responses must be retried with
         the original event and key. Never regenerate time/id on retry.
-      security: []
+      security:
+      - awsSigV4: []
       parameters:
       - name: Idempotency-Key
         in: header
@@ -256,6 +258,14 @@ paths:
                 type: integer
                 minimum: 1
 components:
+  securitySchemes:
+    awsSigV4:
+      type: apiKey
+      name: Authorization
+      in: header
+      description: AWS Signature Version 4 for service execute-api. API Gateway rejects
+        an unsigned or unauthorized request with HTTP 403 and its own JSON body before
+        the request reaches the application.
   schemas:
     S3ManifestReference:
       type: object
