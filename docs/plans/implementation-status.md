@@ -8,6 +8,8 @@ Shared network (2026-10-02): the VPC comes from the separate `cloud-platform-net
 
 No VPC (2026-10-06): the fetch Lambdas moved out of the VPC so the shared network can drop its NAT gateway. The `Shared network` workflow, the network remote state, the VPC preconditions, and the Lambdas' `ec2:` permissions were removed; the release no longer applies the network.
 
+Harness checks (2026-10-18, [#28](https://github.com/maverickuser/data-fetch-service/pull/28)): `internal/architecture` enforces the package import graph and keeps AWS SDKs out of business packages; `make check-docs` also checks AGENTS.md paths and packages, `make` targets, and the decision index; the processing-service LLD and admission OpenAPI copies were re-synced (the OpenAPI copy now documents SigV4); finished plans moved to `plans/completed/`. Documentation and tests only; nothing deployed.
+
 Service teardown (2026-10-18): manual `Destroy service` workflow added in [#24](https://github.com/maverickuser/data-fetch-service/pull/24); it destroys the runtime and keeps the artifact and state buckets in Terraform state. It has not run.
 
 | Increment | Status |
