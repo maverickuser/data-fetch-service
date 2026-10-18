@@ -135,9 +135,11 @@ jobs:
         if: ${{ steps.targets.outputs.has_changes == 'true' }}
         with:
           name: destroy-plan
+          # The root-level text file keeps infra/service/ in the artifact layout the apply job reads.
           path: |
             infra/service/destroy.tfplan
-            infra/service/destroy-plan.txt
+            destroy-plan.txt
+          if-no-files-found: error
           retention-days: 30
 
   destroy:
