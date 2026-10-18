@@ -40,6 +40,19 @@ The manual `Load and resource` workflow uses isolated in-memory source responses
 
 Code and configuration roll back together. Run `Release` at stage `apply` from the earlier commit (Run workflow → pick the tag or branch at that commit). Its packages are still in the package bucket, so the Lambdas return to exactly that build and configuration revision. Run stage `plan` from that commit first and check its `service-plan` artifact for anything other than Lambda code and environment changes.
 
+## Tearing down
+
+The manual `Destroy service` workflow (Actions → Destroy service → Run workflow, on `main`) removes the `infra/service` runtime: Lambdas, API and `fetch.kagent.app` records, certificate, queues and DLQs, schedules, IAM, alarms, and log groups. It never touches `infra/bootstrap` or the Terraform state bucket.
+
+It keeps the artifact and state buckets with their versioning, encryption, lifecycle, and bucket policies. They stay in Terraform state, so the accepted fingerprints survive and the next `Release` `apply` reuses the buckets without an import.
+
+| Stage | What it does |
+|---|---|
+| `plan` | Plans a targeted destroy of every runtime resource in state and publishes it as the `destroy-plan` artifact. Changes nothing |
+| `destroy` | The above, then applies that exact plan. Needs `confirm` set to `data-fetch-service` |
+
+The plan fails if it would delete a kept bucket resource. After apply, the workflow fails if anything other than the kept resources is left in state. It shares the `release-prod` concurrency group, so it never overlaps a release. It needs the secrets `AWS_ROLE_TO_ASSUME` and `HOSTED_ZONE_ID`. Messages still in the queues are lost, so set `ENABLE_INGRESS_CONSUMPTION` and `ENABLE_BSE_SCHEDULE` to `false` and release first if in-flight work matters. Deleting the kept buckets is a separate, manual operation.
+
 ## Operating
 
 - **Failed run:** `GET /v1/runs/{run_id}` for the phase, `/history` for the failure stage and code, `/pulls` for per-job results.

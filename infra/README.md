@@ -24,6 +24,10 @@ terraform -chdir=infra/service init \
   -backend-config=use_lockfile=true
 ```
 
+## Teardown
+
+The manual `Destroy service` workflow destroys everything in `service/` except the resources in `storage.tf`, which stay in state with their data. See the [runbook](../docs/runbook.md#tearing-down). `make check-workflows` fails if a bucket resource is added outside `storage.tf` or a non-bucket resource inside it.
+
 ## Processor submission route
 
 The stack reads no processor Terraform state. The processor runs in the same AWS account, so the Delivery and Reconciler roles get `execute-api:Invoke` on `arn:aws:execute-api:{region}:{this account}:*/*/POST/v1/event-ingestions`: any API ID and stage, but only this account, region, method, and route. See [the decision record](../docs/decisions/0001-processor-route-wildcard.md). A precondition fails the plan when the bundled `processor.url` is not `https://processing.kagent.app/v1/event-ingestions`.
