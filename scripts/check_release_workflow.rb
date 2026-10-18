@@ -54,6 +54,13 @@ unless destroy_commands.include?('reviewed-plan/infra/service/destroy.tfplan') &
   abort 'destroy must apply the reviewed saved plan, not a fresh one'
 end
 
+upload = Array(destroy_jobs.fetch('plan')['steps']).find { |step| step['uses'].to_s.start_with?('actions/upload-artifact@') }
+upload_paths = upload.fetch('with').fetch('path').split("\n").map(&:strip)
+# A plan-only upload is stripped to the artifact root, so the apply job would not find reviewed-plan/infra/service/.
+unless upload_paths.sort == ['destroy-plan.txt', 'infra/service/destroy.tfplan'] && upload.fetch('with')['if-no-files-found'] == 'error'
+  abort 'destroy plan artifact must upload infra/service/destroy.tfplan and the root destroy-plan.txt, failing on missing files'
+end
+
 # The kept set must be exactly the data resources in storage.tf.
 keep = Regexp.new(destroy.fetch('env').fetch('KEEP_PATTERN'))
 Dir[File.join(root, 'infra/service/*.tf')].each do |file|
