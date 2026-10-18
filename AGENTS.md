@@ -1,6 +1,6 @@
 # Agent instructions — data-fetch-service
 
-Active repository guidance. Local implementation includes admission/read APIs, per-job acquisition, complete-event pull orchestration, and processor delivery; see the status file for review status. Do not edit the processing-service LLD; its copy is a read-only external reference.
+Active repository guidance. All planned increments are merged: admission/read APIs, acquisition, complete-event pull, processor delivery, reconciler and automatic retries, reruns and delivery retries, Terraform, and the release pipeline. See the status file for what has been deployed. Do not edit `docs/specs/structured-file-processing-lld.md`; it is a read-only copy of the processing service's LLD.
 
 ## Purpose and reading order
 
@@ -10,7 +10,7 @@ Read:
 
 1. `docs/README.md` for the documentation map and authority labels.
 2. `docs/specs/data-puller-service-lld.md` for current behaviour and architecture.
-3. `docs/plans/data-fetch-service-implementation-plan.md` and `implementation-status.md` in the same directory for the stack and verified progress.
+3. `docs/plans/data-fetch-service-implementation-plan.md` and `implementation-status.md` in the same directory for the delivered increments and verified progress.
 4. `docs/specs/data-puller-service-spec.md` for original requirements; the LLD supersedes conflicting historical decisions.
 5. `docs/specs/structured-file-processing-spec.md` when working on the processor integration boundary.
 
@@ -20,16 +20,19 @@ Keep current instructions and user-approved changes reflected in the LLD. Do not
 
 - `cmd/`: thin Lambda entry points and configuration-check command.
 - `internal/domain`, `internal/config`: identities, states, contracts, YAML validation, and template resolution.
-- `internal/admission`, `internal/orchestration`, `internal/acquisition`: admission, group execution, source downloads/validation/extraction.
-- `internal/state`, `internal/storage`, `internal/delivery`: S3 coordination/artifacts and downstream handoff.
+- `internal/events`: CloudEvents/SQS/native EventBridge normalization into the service event model.
+- `internal/admission`, `internal/pull`, `internal/acquisition`: admission, complete-event pull coordination and handoff intents, source downloads/validation/extraction.
+- `internal/state`, `internal/storage`, `internal/queue`, `internal/delivery`: S3 coordination/artifacts, internal SQS publishing, and downstream handoff.
+- `internal/recovery`: reconciler scans that repair durable intents and expired ownership.
+- `internal/runtime`: wires Lambda entry points to the configured AWS adapters.
 - `internal/api`, `internal/telemetry`: REST adapters, logs, and metrics. `internal/api/openapi.yaml` is the client contract, served at `/docs`; update it with any route or payload change (its drift test runs in `make test-unit`).
-- `config/events.yaml`, `config/environments/prod.yaml`: version-controlled effective configuration.
+- `config/events.yaml`, `config/native-events.yaml`, `config/environments/prod.yaml`: version-controlled effective configuration and approved native EventBridge mappings.
 - `infra/bootstrap`, `infra/service`: separate Terraform backend bootstrap and production runtime resources.
 - `internal/awsverify`: `aws`-tagged tests run only by the AWS integration workflow against disposable resources.
 - `internal/smoke`, `cmd/smoke`: real-endpoint smoke runner, tested locally against a fake deployment.
 - `.github/workflows`: CI checks (`quality.yml`), manual smoke (`smoke.yml`), isolated load/resource fixtures (`load-resource.yml`), staged release (`release.yml`), data-preserving service teardown (`destroy.yml`), and disposable-resource AWS integration tests (`aws-integration.yml`, manual or required by release `plan`/`apply`).
 
-Only claim a package or feature exists after inspecting the checkout; this map describes the target architecture during incremental implementation.
+Only claim a package or feature exists after inspecting the checkout; update this map when packages are added, renamed, or removed.
 
 ## Local command contract
 
@@ -42,7 +45,7 @@ Implemented commands:
 - `make coverage-check`: enforce coverage strictly greater than 95% from that profile.
 - `make test-integration`: exercise the real S3 SDK with mocked HTTP, BSE/NSDL event-to-state and source-to-artifact composition, HTTP admission/read routes, and processor delivery with an in-memory HTTP handler. Integration coverage is separate from the unit gate.
 - `make test-load`: run isolated 64-MiB streaming, 32-MiB ZIP, and slow-response acquisition fixtures with timing/allocation logs; the manual workflow also captures peak process memory.
-- `make build`: build implemented production entry points/packages, including Pull, Delivery, and Reconciler Lambdas.
+- `make build`: build implemented production entry points/packages, including the API, Admission, Pull, Delivery, and Reconciler Lambdas.
 - `make configcheck`: validate the effective event configuration and print its revision.
 - `make check-docs`: validate repository documentation links.
 - `make check-workflows`: validate the release dependency chain, reusable AWS integration trigger, the teardown's guards and kept-resource set, and workflow shell syntax.
@@ -51,7 +54,7 @@ Implemented commands:
 - `make package`: build one reproducible `bootstrap`+config ZIP per Lambda under `dist/` and write `dist/release.json` with the configuration revision and base64 SHA-256 of each ZIP.
 - `make check`: run all implemented deterministic gates.
 
-Add configuration/Terraform/live-test commands as their implementations land and update this file in the same PR. A documented command must perform its advertised checks; never use success-returning placeholders. Local deterministic checks require no AWS credentials. Real AWS integration and production smoke tests run through the documented GitHub workflows using configured inputs.
+When adding or changing a `make` target, update this list in the same PR. A documented command must perform its advertised checks; never use success-returning placeholders. Local deterministic checks require no AWS credentials. Real AWS integration and production smoke tests run through the documented GitHub workflows using configured inputs.
 
 ## Implementation invariants
 
@@ -68,7 +71,7 @@ Add configuration/Terraform/live-test commands as their implementations land and
 
 ## Test and review expectations
 
-Read `docs/engineering/go-standards.md` and `docs/engineering/pr-review.md` once introduced in foundation PR 01. Apply the explicitly adopted language rules, provide evidence for review findings, and distinguish required fixes from nonblocking preferences. The agreed workflow uses separate implementer-agent and reviewer-agent passes; no human approval is required for local PR review. Do not claim a GitHub approval by a human or fabricate review identity.
+Read `docs/engineering/go-standards.md` and `docs/engineering/pr-review.md`. Apply the explicitly adopted language rules, provide evidence for review findings, and distinguish required fixes from nonblocking preferences. The agreed workflow uses separate implementer-agent and reviewer-agent passes; no human approval is required for local PR review. Do not claim a GitHub approval by a human or fabricate review identity.
 
 Add meaningful unit and mocked integration tests with every behavioural change. Unit statement coverage must be strictly greater than 95% over all authored production packages, including adapters and packages without tests. Do not round up, exclude difficult code, or mix integration coverage into this result. Preserve only explicit generated/vendor/test exclusions.
 
@@ -76,13 +79,11 @@ Test externally observable outcomes and interruption/retry paths. Use injected c
 
 Inspect the current branch, worktree, applicable nested guidance, and implementation status before editing. Preserve unrelated changes. Run checks appropriate to the PR and report what ran, what passed, and what could not run.
 
-## Stacked PR workflow
+## PR and release workflow
 
-Follow the dependency order in the implementation plan. Each child PR targets its parent branch until that parent merges. Keep the diff focused on the increment, identify its dependency, and include test evidence and any migration/operational effect in the PR description.
+Branch from `main` and target `main`. Keep each diff focused, and include test evidence and any migration/operational effect in the PR description. If a change is split into dependent PRs, each child targets its parent branch until that parent merges; merge bottom-up, rerun required checks on rewritten heads, and do not replay squashed parent commits. Keep implementation-status entries accurate and link actual PRs; do not invent links or mark planned work complete.
 
-Merge bottom-up and rebase/retarget children carefully. Rerun required checks on rewritten heads. Do not replay squashed parent commits. Keep implementation-status entries accurate and link actual PRs; do not invent links or mark planned work complete.
-
-Production deployment activates only after the full implementation and release workflow is ready. Perform implementation, agent review/fixes, and deterministic tests locally. Do not apply Terraform or require live AWS resources for intermediate PRs. After the complete stack is locally verified, GitHub Actions CD can run from `main` and assume the dedicated AWS role through OIDC using the `AWS_ROLE_TO_ASSUME` secret. Role ARN, processor integration, and fixtures are deployment inputs. Queue ARN/URL come from this service's Terraform outputs. Keep secrets out of source and logs, and keep destructive test fixtures separate from production data.
+Implement, agent-review, and run deterministic tests locally; PRs never apply Terraform or need live AWS resources. Deployment happens only through the manual GitHub workflows, normally run from `main`; a rollback runs `Release` from the earlier commit (see the [runbook](docs/runbook.md)). They assume the dedicated AWS role through OIDC using the `AWS_ROLE_TO_ASSUME` secret. Role ARN, processor integration, and fixtures are deployment inputs. Queue ARN/URL come from this service's Terraform outputs. Keep secrets out of source and logs, and keep destructive test fixtures separate from production data.
 
 ## Context management
 
