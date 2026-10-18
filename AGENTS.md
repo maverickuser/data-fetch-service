@@ -54,7 +54,7 @@ Implemented commands:
 - `make package`: build one reproducible `bootstrap`+config ZIP per Lambda under `dist/` and write `dist/release.json` with the configuration revision and base64 SHA-256 of each ZIP.
 - `make check`: run all implemented deterministic gates.
 
-Add configuration/Terraform/live-test commands as their implementations land and update this file in the same PR. A documented command must perform its advertised checks; never use success-returning placeholders. Local deterministic checks require no AWS credentials. Real AWS integration and production smoke tests run through the documented GitHub workflows using configured inputs.
+When adding or changing a `make` target, update this list in the same PR. A documented command must perform its advertised checks; never use success-returning placeholders. Local deterministic checks require no AWS credentials. Real AWS integration and production smoke tests run through the documented GitHub workflows using configured inputs.
 
 ## Implementation invariants
 
@@ -83,7 +83,7 @@ Inspect the current branch, worktree, applicable nested guidance, and implementa
 
 Branch from `main` and target `main`. Keep each diff focused, and include test evidence and any migration/operational effect in the PR description. If a change is split into dependent PRs, each child targets its parent branch until that parent merges; merge bottom-up, rerun required checks on rewritten heads, and do not replay squashed parent commits. Keep implementation-status entries accurate and link actual PRs; do not invent links or mark planned work complete.
 
-Implement, agent-review, and run deterministic tests locally; PRs never apply Terraform or need live AWS resources. Deployment happens only through the manual GitHub workflows run from `main` (see the [runbook](docs/runbook.md)), which assume the dedicated AWS role through OIDC using the `AWS_ROLE_TO_ASSUME` secret. Role ARN, processor integration, and fixtures are deployment inputs. Queue ARN/URL come from this service's Terraform outputs. Keep secrets out of source and logs, and keep destructive test fixtures separate from production data.
+Implement, agent-review, and run deterministic tests locally; PRs never apply Terraform or need live AWS resources. Deployment happens only through the manual GitHub workflows, normally run from `main`; a rollback runs `Release` from the earlier commit (see the [runbook](docs/runbook.md)). They assume the dedicated AWS role through OIDC using the `AWS_ROLE_TO_ASSUME` secret. Role ARN, processor integration, and fixtures are deployment inputs. Queue ARN/URL come from this service's Terraform outputs. Keep secrets out of source and logs, and keep destructive test fixtures separate from production data.
 
 ## Context management
 
